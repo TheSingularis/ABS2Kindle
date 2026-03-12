@@ -1,0 +1,81 @@
+# Node modules
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Dependency directories
+.cache/
+.npm/
+
+# Build outputs
+dist/
+build/
+out/
+release/
+.release/
+
+# Electron packaging outputs
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.dmg
+*.exe
+*.msi
+*.AppImage
+
+# Electron asar
+*.asar
+*.asar.unpack
+
+# Compiled binary addons
+build/Release/
+
+# Environment files
+.env
+.env.*
+
+# Coverage and reports
+coverage/
+nyc_output/
+
+# Misc
+*.tgz
+*.lock-wscript
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.swp
+*~
+
+# TypeScript
+*.tsbuildinfo
+
+# Source maps (optional)
+# *.map
+
+# Ignore packaged installers in releases/
+releases/
+
+# Keep lockfiles (package-lock.json / yarn.lock) tracked for reproducible installs
+# (uncomment to ignore if you prefer not to commit lockfiles)
+# package-lock.json
+# yarn.lock

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head>
+        <meta charset="UTF-8" />
+        <title>ABS2Kindle</title>
+        <link rel="stylesheet" href="style.css" />
+    </head>
+
+    <body>
+        <div id="app">
+
+            <!-- Titlebar -->
+            <div id="titlebar">
+                <div class="drag-region">
+                    <span class="app-name">ABS<span class="dim">2</span>Kindle</span>
+                </div>
+                <input type="text" id="search" placeholder="Search library…" />
+                <div class="wm-buttons">
+                    <button class="wm-btn minimize" id="btn-minimize">−</button>
+                    <button class="wm-btn maximize" id="btn-maximize">⤢</button>
+                    <button class="wm-btn close" id="btn-close">✕</button>
+                </div>
+            </div>
+
+            <!-- Main content -->
+            <div id="main">
+
+                <!-- Sidebar -->
+                <div id="sidebar">
+                    <div class="sidebar-section">
+                        <div class="sidebar-label">Library</div>
+                        <div class="sidebar-item active" id="nav-library">
+                            <span class="icon">📚</span> All Books
+                        </div>
+                        <div class="sidebar-item" id="nav-settings">
+                            <span class="icon">⚙️</span> Settings
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section" id="devices-section">
+                        <div class="sidebar-label">Devices</div>
+                        <div id="device-list">
+                            <div class="no-device">No Kindle detected</div>
+                        </div>
+                        <button id="refresh-devices">↻ Refresh</button>
+                    </div>
+                </div>
+
+                <!-- Right panel -->
+                <div id="content">
+
+                    <!-- Book grid view -->
+                    <div id="view-library">
+                        <div id="book-grid">
+                            <div class="empty-state">Configure your ABS server in Settings to get started.</div>
+                        </div>
+                    </div>
+
+                    <!-- Settings view (hidden by default) -->
+                    <div id="view-settings" class="hidden">
+                        <div id="settings-form">
+                            <h2>Server Settings</h2>
+                    
+                            <label>Server URL
+                                <input type="text" id="input-url" placeholder="http://192.168.1.10:13378" />
+                            </label>
+                    
+                            <!-- Auth method toggle -->
+                            <div class="auth-toggle">
+                                <button class="toggle-btn active" id="toggle-apikey">API Key</button>
+                                <button class="toggle-btn" id="toggle-oidc">OIDC / SSO</button>
+                            </div>
+                    
+                            <!-- API key fields -->
+                            <div id="auth-apikey">
+                                <label>API Key
+                                    <input type="password" id="input-apikey" placeholder="your-api-key" />
+                                </label>
+                                <div class="form-row">
+                                    <button id="btn-save">Save</button>
+                                    <button id="btn-test" class="secondary">Test Connection</button>
+                                    <span id="test-result"></span>
+                                </div>
+                            </div>
+                    
+                            <!-- OIDC fields -->
+                            <div id="auth-oidc" class="hidden">
+                                <p class="auth-hint">
+                                    This will open your browser to sign in via your ABS server's OIDC provider.
+                                    The token will be returned automatically.
+                                </p>
+                                <div class="form-row">
+                                    <button id="btn-oidc-login">Open Browser to Sign In</button>
+                                    <span id="oidc-status"></span>
+                                </div>
+                                <div id="oidc-token-display" class="hidden">
+                                    <span class="token-ok">✓ Signed in via OIDC</span>
+                                    <button id="btn-oidc-clear" class="secondary">Sign Out</button>
+                                </div>
+                            </div>
+                    
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Bottom bar -->
+            <div id="bottombar">
+                <span id="selection-label">No books selected</span>
+                <button id="btn-send" disabled>Send to Kindle</button>
+            </div>
+
+        </div>
+        <script src="app.js"></script>
+    </body>
+
+</html>
