@@ -1,68 +1,9 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const crypto = require("crypto");
-
-// Store verifier temporarily between steps
-// Persisted to disk so it survives the process being killed and relaunched by the OS protocol handler
-let pendingOidcVerifier = null;
-const OIDC_PENDING_PATH = path.join(
-  os.tmpdir(),
-  "abs2kindle-oidc-pending.json",
-);
-
-function savePendingOidc(data) {
-  pendingOidcVerifier = data;
-  try {
-    fs.writeFileSync(OIDC_PENDING_PATH, JSON.stringify(data));
-  } catch {}
-}
-
-function loadPendingOidc() {
-  try {
-    if (fs.existsSync(OIDC_PENDING_PATH))
-      pendingOidcVerifier = JSON.parse(
-        fs.readFileSync(OIDC_PENDING_PATH, "utf8"),
-      );
-  } catch {
-    pendingOidcVerifier = null;
-  }
-}
-
-function clearPendingOidc() {
-  pendingOidcVerifier = null;
-  try {
-    fs.unlinkSync(OIDC_PENDING_PATH);
-  } catch {}
-}
-
-function base64URLEncode(buffer) {
-  return buffer
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
-}
-
-// ── Single-instance lock ──────────────────────────────────────
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-}
-
-let mainWindow;
-
-// ── Protocol registration ─────────────────────────────────────
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient("abs2kindle", process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
-  }
-} else {
-  app.setAsDefaultProtocolClient("abs2kindle");
-}
+const http = require("http");
+const https = require("https");
 
 // ── Settings ──────────────────────────────────────────────────
 let settingsStore = {};
@@ -70,10 +11,9 @@ const SETTINGS_PATH = path.join(app.getPath("userData"), "settings.json");
 
 function loadSettings() {
   try {
-    if (fs.existsSync(SETTINGS_PATH)) {
+    if (fs.existsSync(SETTINGS_PATH))
       settingsStore = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
-    }
-  } catch (e) {
+  } catch {
     settingsStore = {};
   }
 }
@@ -83,16 +23,14 @@ function saveSettings(data) {
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settingsStore, null, 2));
 }
 
-// ── Auth ──────────────────────────────────────────────────────
-function exchangeCodeForToken(serverUrl, code, codeVerifier) {
+// ── Main Functionality ────────────────────────────────────────
+
+function absRequest(serverUrl, apiKey, endpoint) {
   const http = require("http");
   const https = require("https");
 
   return new Promise((resolve, reject) => {
-    const url = new URL(`${serverUrl}/auth/openid/callback`);
-    url.searchParams.set("code", code);
-    url.searchParams.set("code_verifier", codeVerifier);
-
+    const url = new URL(`${serverUrl}/api/${endpoint}`);
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.request(
       {
@@ -100,6 +38,7 @@ function exchangeCodeForToken(serverUrl, code, codeVerifier) {
         port: url.port || (url.protocol === "https:" ? 443 : 80),
         path: url.pathname + url.search,
         method: "GET",
+        headers: { Authorization: `Bearer ${apiKey}` },
         rejectUnauthorized: false,
       },
       (res) => {
@@ -108,8 +47,8 @@ function exchangeCodeForToken(serverUrl, code, codeVerifier) {
         res.on("end", () => {
           try {
             resolve(JSON.parse(data));
-          } catch {
-            reject(new Error("Bad response from server"));
+          } catch (e) {
+            reject(new Error("Could not parse response: " + e.message));
           }
         });
       },
@@ -119,51 +58,9 @@ function exchangeCodeForToken(serverUrl, code, codeVerifier) {
   });
 }
 
-async function handleAuthCallback(url) {
-  try {
-    const parsed = new URL(url);
-    const code = parsed.searchParams.get("code");
-    const error = parsed.searchParams.get("error");
-    const returnedState = parsed.searchParams.get("state");
-
-    if (error) {
-      mainWindow?.webContents.send("oidc-error", error);
-      return;
-    }
-
-    if (!code || !pendingOidcVerifier) {
-      mainWindow?.webContents.send("oidc-error", "Missing code or verifier");
-      return;
-    }
-
-    const { verifier, serverUrl, state } = pendingOidcVerifier;
-
-    if (returnedState !== state) {
-      clearPendingOidc();
-      mainWindow?.webContents.send("oidc-error", "State parameter mismatch");
-      return;
-    }
-
-    clearPendingOidc();
-
-    // Exchange code for token
-    const result = await exchangeCodeForToken(serverUrl, code, verifier);
-
-    if (result?.user?.token) {
-      saveSettings({ apiKey: result.user.token, authMethod: "oidc" });
-      mainWindow?.webContents.send("oidc-success", {
-        token: result.user.token,
-        username: result.user.username,
-      });
-    } else {
-      mainWindow?.webContents.send("oidc-error", "No token in response");
-    }
-  } catch (e) {
-    mainWindow?.webContents.send("oidc-error", e.message);
-  }
-}
-
 // ── Window ────────────────────────────────────────────────────
+let mainWindow;
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -178,49 +75,73 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-
   win.loadFile(path.join(__dirname, "renderer/index.html"));
   mainWindow = win;
 }
 
+// ── Linux protocol handler (.desktop + socat wrapper) ────────
+function registerLinuxProtocol() {
+  if (process.platform !== "linux") return;
+  const { execSync } = require("child_process");
+  const desktopDir = path.join(os.homedir(), ".local", "share", "applications");
+  const desktopPath = path.join(desktopDir, "abs2kindle.desktop");
+  const wrapperPath = path.join(desktopDir, "abs2kindle-url-handler.sh");
+
+  // Tiny shell script: forwards the URL to the running app via the Unix socket.
+  // Uses node (always available in this app's context) to write + close cleanly.
+  const wrapperScript =
+    [
+      "#!/bin/sh",
+      `# Forwards abs2kindle:// URLs to the running ABS2Kindle instance via socket`,
+      `SOCK="${path.join(os.tmpdir(), "abs2kindle.sock")}"`,
+      `URL="$1"`,
+      `if command -v socat >/dev/null 2>&1; then`,
+      `  printf '%s' "$URL" | socat -t1 - UNIX-CONNECT:"$SOCK"`,
+      `elif command -v node >/dev/null 2>&1; then`,
+      `  node -e "const n=require('net'),c=n.createConnection('$SOCK',()=>{c.end(process.argv[1])});c.on('error',()=>{})" "$URL"`,
+      `else`,
+      `  printf '%s' "$URL" | nc -q1 -U "$SOCK" 2>/dev/null || printf '%s' "$URL" | nc -U "$SOCK"`,
+      `fi`,
+    ].join("\n") + "\n";
+
+  const desktopContents =
+    [
+      "[Desktop Entry]",
+      "Name=ABS2Kindle",
+      "Type=Application",
+      `Exec=${wrapperPath} %u`,
+      "MimeType=x-scheme-handler/abs2kindle;",
+      "NoDisplay=true",
+    ].join("\n") + "\n";
+
+  try {
+    fs.mkdirSync(desktopDir, { recursive: true });
+    fs.writeFileSync(wrapperPath, wrapperScript);
+    fs.chmodSync(wrapperPath, 0o755);
+    fs.writeFileSync(desktopPath, desktopContents);
+    execSync(
+      `xdg-mime default abs2kindle.desktop x-scheme-handler/abs2kindle`,
+      { stdio: "ignore" },
+    );
+    try {
+      execSync(`update-desktop-database ${desktopDir}`, { stdio: "ignore" });
+    } catch {}
+    console.log("Protocol handler registered via wrapper:", wrapperPath);
+  } catch (e) {
+    console.error("Failed to register protocol handler:", e.message);
+  }
+}
+
 // ── IPC handlers ──────────────────────────────────────────────
-ipcMain.handle("ping", async () => "pong from main process!");
-
-ipcMain.handle("start-oidc", (_, { serverUrl }) => {
-  // Generate PKCE pair
-  const verifier = base64URLEncode(crypto.randomBytes(32));
-  const challenge = base64URLEncode(
-    crypto.createHash("sha256").update(verifier).digest(),
-  );
-  const state = base64URLEncode(crypto.randomBytes(16));
-
-  pendingOidcVerifier = { verifier, serverUrl, state };
-  savePendingOidc({ verifier, serverUrl, state });
-  const params = new URLSearchParams({
-    redirect_uri: "abs2kindle://auth",
-    client_id: "ABS2Kindle",
-    response_type: "code",
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-  });
-
-  const url = `${serverUrl}/auth/openid?${params.toString()}`;
-  console.log("Opening OIDC URL:", url);
-  shell.openExternal(url);
-  return { ok: true };
-});
+ipcMain.handle("ping", async () => "pong");
 
 ipcMain.handle("get-settings", () => settingsStore);
-
 ipcMain.handle("save-settings", (_, data) => {
   saveSettings(data);
   return { ok: true };
 });
 
 ipcMain.handle("test-connection", async (_, { serverUrl, apiKey }) => {
-  const http = require("http");
-  const https = require("https");
   return new Promise((resolve) => {
     try {
       const url = new URL(`${serverUrl}/api/libraries`);
@@ -257,6 +178,42 @@ ipcMain.handle("test-connection", async (_, { serverUrl, apiKey }) => {
   });
 });
 
+ipcMain.handle("get-libraries", async () => {
+  const { serverUrl, apiKey } = settingsStore;
+  try {
+    const result = await absRequest(serverUrl, apiKey, "libraries");
+    return result?.libraries ?? [];
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle("get-books", async (_, { libraryId }) => {
+  const { serverUrl, apiKey } = settingsStore;
+  try {
+    let all = [];
+    let page = 0;
+    const limit = 100;
+    while (true) {
+      const result = await absRequest(
+        serverUrl,
+        apiKey,
+        `libraries/${libraryId}/items?limit=${limit}&page=${page}`,
+      );
+      const items =
+        result?.results?.results ?? result?.results ?? result?.items ?? [];
+      all = all.concat(items);
+      if (items.length < limit) break;
+      page++;
+    }
+    return { results: all };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// ── Window controls ─────────────────────────────────────────────
+
 ipcMain.on("window-minimize", () =>
   BrowserWindow.getFocusedWindow()?.minimize(),
 );
@@ -268,63 +225,20 @@ ipcMain.on("window-maximize", () => {
 
 ipcMain.on("window-close", () => BrowserWindow.getFocusedWindow()?.close());
 
-// ── App lifecycle ─────────────────────────────────────────────
+// ── App bootstrap ─────────────────────────────────────────────
+app.setName("ABS2Kindle");
+app.commandLine.appendSwitch("disable-gpu-vsync");
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.whenReady().then(() => {
+    registerLinuxProtocol();
+    loadSettings();
+    createWindow();
+  });
 
-// On Linux, setAsDefaultProtocolClient requires a registered .desktop file.
-// We write one at runtime so the OS can dispatch abs2kindle:// URLs back to us.
-function registerLinuxProtocol() {
-  if (process.platform !== "linux") return;
-  const { execSync } = require("child_process");
-  const desktopDir = path.join(os.homedir(), ".local", "share", "applications");
-  const desktopPath = path.join(desktopDir, "abs2kindle.desktop");
-  const exec = process.execPath; // path to the electron binary
-  const appPath = path.resolve(__dirname, "..");
-
-  const contents =
-    [
-      "[Desktop Entry]",
-      "Name=ABS2Kindle",
-      "Type=Application",
-      `Exec=${exec} ${appPath} %u`,
-      "MimeType=x-scheme-handler/abs2kindle;",
-      "NoDisplay=true",
-    ].join("\n") + "\n";
-
-  try {
-    fs.mkdirSync(desktopDir, { recursive: true });
-    fs.writeFileSync(desktopPath, contents);
-    execSync(
-      `xdg-mime default abs2kindle.desktop x-scheme-handler/abs2kindle`,
-      { stdio: "ignore" },
-    );
-    execSync(`update-desktop-database ${desktopDir}`, { stdio: "ignore" });
-  } catch (e) {
-    console.error("Failed to register protocol handler:", e.message);
-  }
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
 }
-
-app.whenReady().then(() => {
-  registerLinuxProtocol();
-  loadSettings();
-  loadPendingOidc();
-  createWindow();
-
-  // Handle protocol callback on the initial launch (e.g. when no prior instance was running)
-  const callbackUrl = process.argv.find((arg) =>
-    arg.startsWith("abs2kindle://"),
-  );
-  if (callbackUrl) handleAuthCallback(callbackUrl);
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-
-app.on("second-instance", (event, commandLine) => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
-  const url = commandLine.find((arg) => arg.startsWith("abs2kindle://"));
-  if (url) handleAuthCallback(url);
-});

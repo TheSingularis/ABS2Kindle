@@ -59,6 +59,7 @@ body {
 
 .app-name .dim {
     color: var(--text3);
+    font-weight: bold;
 }
 
 #search {

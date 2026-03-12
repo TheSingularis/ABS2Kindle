@@ -61,17 +61,11 @@
                     <div id="view-settings" class="hidden">
                         <div id="settings-form">
                             <h2>Server Settings</h2>
-                    
+
                             <label>Server URL
-                                <input type="text" id="input-url" placeholder="http://192.168.1.10:13378" />
+                                <input type="text" id="input-url" placeholder="http://192.168.1.10:13378" value="https://audiobookshelf.notahomeserver.xyz" />
                             </label>
-                    
-                            <!-- Auth method toggle -->
-                            <div class="auth-toggle">
-                                <button class="toggle-btn" id="toggle-oidc">OIDC / SSO</button>
-                                <button class="toggle-btn active" id="toggle-apikey">API Key</button>
-                            </div>
-                    
+
                             <!-- API key fields -->
                             <div id="auth-apikey">
                                 <label>API Key
@@ -83,23 +77,7 @@
                                     <span id="test-result"></span>
                                 </div>
                             </div>
-                    
-                            <!-- OIDC fields -->
-                            <div id="auth-oidc" class="hidden">
-                                <p class="auth-hint">
-                                    This will open your browser to sign in via your ABS server's OIDC provider.
-                                    The token will be returned automatically.
-                                </p>
-                                <div class="form-row">
-                                    <button id="btn-oidc-login">Open Browser to Sign In</button>
-                                    <span id="oidc-status"></span>
-                                </div>
-                                <div id="oidc-token-display" class="hidden">
-                                    <span class="token-ok">✓ Signed in via OIDC</span>
-                                    <button id="btn-oidc-clear" class="secondary">Sign Out</button>
-                                </div>
-                            </div>
-                    
+
                         </div>
                     </div>
 

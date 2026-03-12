@@ -4,12 +4,11 @@
   "description": "Send ebooks from Audiobookshelf to your Kindle",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "/run/current-system/sw/bin/electron \"$PWD\"",
     "build:linux": "electron-builder --linux",
     "build:win": "electron-builder --win"
   },
   "devDependencies": {
-    "electron": "^28.0.0",
     "electron-builder": "^24.0.0"
   },
   "build": {
