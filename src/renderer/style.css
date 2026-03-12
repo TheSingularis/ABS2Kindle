@@ -7,14 +7,14 @@
 }
 
 :root {
-    --bg: #0f0f10;
-    --surface: #18181b;
-    --surface2: #1f1f23;
-    --border: #2a2a30;
-    --accent: #e8a838;
-    --text: #e8e8ec;
-    --text2: #8888a0;
-    --text3: #444455;
+    --bg: #0d0d0e;
+    --surface: #1c1c20;
+    --surface2: #26262c;
+    --border: #38383f;
+    --accent: #f0b040;
+    --text: #f0f0f5;
+    --text2: #a0a0bc;
+    --text3: #606075;
 }
 
 html,

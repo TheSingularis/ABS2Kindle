@@ -130,7 +130,6 @@ async function loadSettingsIntoForm() {
     document.getElementById("input-url").value = settings.serverUrl;
   }
   if (settings.authMethod === "oidc") {
-    toggleOidc.click();
     if (settings.apiKey) {
       document.getElementById("oidc-token-display").classList.remove("hidden");
     }

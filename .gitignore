@@ -61,6 +61,8 @@ ehthumbs.db
 
 # Editor directories and files
 .vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
 .idea/
 *.sublime-workspace
 *.swp
