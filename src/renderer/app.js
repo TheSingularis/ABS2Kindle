@@ -31,6 +31,72 @@ document
   .getElementById("nav-settings")
   .addEventListener("click", () => showView("settings"));
 
+// ── Kindle Detection ──────────────────────────────────────────
+let detectedKindles = [];
+let selectedKindle = null;
+
+async function refreshKindles() {
+  const list = document.getElementById("device-list");
+  list.innerHTML = '<div class="no-device">Scanning…</div>';
+  detectedKindles = await window.api.detectKindles();
+  renderKindleSidebar();
+}
+
+function renderKindleSidebar() {
+  const list = document.getElementById("device-list");
+
+  if (detectedKindles.length === 0) {
+    list.innerHTML = '<div class="no-device">No Kindle detected</div>';
+    selectedKindle = null;
+    updateBottomBar();
+    return;
+  }
+
+  // Check if any entry is a "busy" error (device seen but USB held by OS daemon)
+  const busyEntry = detectedKindles.find((d) => d.error === "busy");
+  if (busyEntry) {
+    list.innerHTML = `
+      <div class="no-device device-busy">
+        ⚠️ <strong>${busyEntry.name}</strong> detected but busy<br>
+        <span class="device-busy-hint">System MTP daemon is holding the USB interface.<br>Apply the udev rule in README.md, then replug.</span>
+      </div>`;
+    selectedKindle = null;
+    updateBottomBar();
+    return;
+  }
+
+  list.innerHTML = "";
+  detectedKindles.forEach((device, i) => {
+    const el = document.createElement("div");
+    el.className = "device-entry" + (i === 0 ? " selected" : "");
+    el.innerHTML = `
+      <div class="device-name">📱 ${device.name}</div>
+      <div class="device-sub">${device.bookCount} book${device.bookCount !== 1 ? "s" : ""} on device</div>
+    `;
+    el.addEventListener("click", () => {
+      document
+        .querySelectorAll(".device-entry")
+        .forEach((d) => d.classList.remove("selected"));
+      el.classList.add("selected");
+      selectedKindle = device;
+      updateBottomBar();
+    });
+    list.appendChild(el);
+
+    // Auto-select first device found
+    if (i === 0) selectedKindle = device;
+  });
+
+  updateBottomBar();
+}
+
+document
+  .getElementById("refresh-devices")
+  .addEventListener("click", refreshKindles);
+
+// Auto-detect on load
+refreshKindles();
+
 // ── Window controls ───────────────────────────────────────────
 document
   .getElementById("btn-minimize")
@@ -141,12 +207,78 @@ function updateBottomBar() {
   const label = document.getElementById("selection-label");
   const btn = document.getElementById("btn-send");
   const count = selectedBooks.size;
-  label.textContent =
-    count === 0
-      ? "No books selected"
-      : `${count} book${count > 1 ? "s" : ""} selected`;
-  btn.disabled = count === 0;
+
+  if (count === 0) {
+    label.textContent = "No books selected";
+  } else if (!selectedKindle) {
+    label.textContent = `${count} book${count > 1 ? "s" : ""} selected — connect a Kindle to send`;
+  } else {
+    label.textContent = `Send ${count} book${count > 1 ? "s" : ""} to ${selectedKindle.name}`;
+  }
+
+  btn.disabled = count === 0 || !selectedKindle;
 }
+
+document.getElementById("btn-send").addEventListener("click", async () => {
+  if (selectedBooks.size === 0 || !selectedKindle) return;
+
+  const btn = document.getElementById("btn-send");
+  const label = document.getElementById("selection-label");
+  btn.disabled = true;
+
+  const removeListener = window.api.onTransferProgress(
+    ({ current, total, status, title, error }) => {
+      if (status === "downloading") {
+        label.textContent = `⬇ Downloading ${current} of ${total}…`;
+      } else if (status === "copying") {
+        label.textContent = `📋 Copying to Kindle: ${title}`;
+      } else if (status === "done") {
+        label.textContent = `✓ ${current} of ${total} done: ${title}`;
+      } else if (status === "dolphin-blocking") {
+        label.textContent = `⚠️ Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
+      } else if (status === "error") {
+        label.textContent = `✗ Error on ${current} of ${total}: ${error}`;
+      }
+    },
+  );
+
+  try {
+    const results = await window.api.sendToKindle({
+      itemIds: Array.from(selectedBooks),
+      kindleDocumentsPath: selectedKindle.documentsPath,
+      device: selectedKindle,
+    });
+
+    removeListener();
+
+    const succeeded = results.results.filter((r) => r.ok);
+    const failed = results.results.filter((r) => !r.ok);
+    const dolphinBlocking = failed.some((r) => r.error === "dolphin-blocking");
+
+    if (dolphinBlocking) {
+      label.textContent = `⚠️ Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
+    } else if (failed.length === 0) {
+      label.textContent = `✓ ${succeeded.length} book${succeeded.length > 1 ? "s" : ""} sent to ${selectedKindle.name}`;
+    } else if (succeeded.length === 0) {
+      label.textContent = `✗ All ${failed.length} transfers failed`;
+    } else {
+      label.textContent = `✓ ${succeeded.length} sent  ✗ ${failed.length} failed`;
+    }
+  } catch (e) {
+    removeListener();
+    label.textContent = `✗ Transfer failed: ${e.message}`;
+  }
+
+  // Clear selection regardless of outcome
+  selectedBooks.clear();
+  document
+    .querySelectorAll(".book-card.selected")
+    .forEach((c) => c.classList.remove("selected"));
+  btn.disabled = true;
+
+  // Refresh Kindle book count to reflect new files
+  refreshKindles();
+});
 
 // ── Settings & Auth ───────────────────────────────────────────
 document.getElementById("btn-save").addEventListener("click", async () => {

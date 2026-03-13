@@ -12,6 +12,15 @@ contextBridge.exposeInMainWorld("api", {
   testConnection: (opts) => ipcRenderer.invoke("test-connection", opts),
 
   // Libraries
-    getLibraries: () => ipcRenderer.invoke("get-libraries"),
-    getBooks: (opts) => ipcRenderer.invoke("get-books", opts),
+  getLibraries: () => ipcRenderer.invoke("get-libraries"),
+  getBooks: (opts) => ipcRenderer.invoke("get-books", opts),
+
+  // Kindle
+  detectKindles: () => ipcRenderer.invoke("detect-kindles"),
+  sendToKindle: (opts) => ipcRenderer.invoke("send-to-kindle", opts),
+  onTransferProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("transfer-progress", handler);
+    return () => ipcRenderer.removeListener("transfer-progress", handler);
+  },
 });

@@ -13,16 +13,17 @@ Think knockoff iTunes for ABS → Kindle: browse the library, select audiobooks/
 - **Preload bridge**: `src/preload.js` (context-isolated, `window.api`)
 - **Build**: `electron-builder` — targets AppImage/deb (Linux) and NSIS (Windows)
 - **Dev run**: `npm start` → `electron "$PWD"`
+- **Kindle transport (KDE/MTP)**: `kioclient5` + kmtpd D-Bus (primary on KDE); GVFS FUSE (GNOME); `jmtpfs` FUSE (non-KDE fallback)
 
 ## File Map
 
-| File | Role |
-|---|---|
-| `src/main.js` | Main process: window, IPC handlers, settings, Linux protocol handler |
-| `src/preload.js` | Exposes `window.api` to renderer via `contextBridge` |
-| `src/renderer/app.js` | Renderer logic: navigation, settings form, library UI |
-| `src/renderer/index.html` | App shell: titlebar, sidebar, library grid, settings panel |
-| `src/renderer/style.css` | Styles |
+| File                      | Role                                                                                                  |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `src/main.js`             | Main process: window, IPC handlers, settings, Kindle detection, file transfer, Linux protocol handler |
+| `src/preload.js`          | Exposes `window.api` to renderer via `contextBridge`                                                  |
+| `src/renderer/app.js`     | Renderer logic: navigation, settings form, library UI, Kindle sidebar, transfer progress              |
+| `src/renderer/index.html` | App shell: titlebar, sidebar, library grid, settings panel                                            |
+| `src/renderer/style.css`  | Styles (includes `.device-busy` / `.device-busy-hint` for busy-device state)                          |
 
 ## Authentication
 
@@ -42,26 +43,94 @@ Think knockoff iTunes for ABS → Kindle: browse the library, select audiobooks/
 ## `window.api` surface (preload.js)
 
 ```js
-ping()                               // → "pong"
-windowMinimize()
-windowMaximize()
-windowClose()
-getSettings()                        // → settingsStore object
-saveSettings(data)                   // → { ok: true }
-testConnection({ serverUrl, apiKey }) // → { ok, count } | { ok: false, error }
+ping(); // → "pong"
+windowMinimize();
+windowMaximize();
+windowClose();
+
+// Settings
+getSettings(); // → settingsStore object
+saveSettings(data); // → { ok: true }
+testConnection({ serverUrl, apiKey }); // → { ok, count } | { ok: false, error }
+
+// Library
+getLibraries(); // → { ok, libraries } | { ok: false, error }
+getBooks({ libraryId }); // → { ok, books } | { ok: false, error }
+
+// Kindle
+detectKindles(); // → [ deviceObject, ... ]
+sendToKindle({ itemIds, kindleDocumentsPath, device }); // → { results: [...] }
+onTransferProgress(callback); // registers listener for "transfer-progress" events; returns unsubscribe fn
 ```
 
 ## IPC Handlers (main.js)
 
-| Channel | Type | Notes |
-|---|---|---|
-| `ping` | handle | returns `"pong"` |
-| `get-settings` | handle | returns in-memory `settingsStore` |
-| `save-settings` | handle | merges + writes `settings.json` |
-| `test-connection` | handle | GET `/api/libraries` with Bearer token |
-| `window-minimize` | on | minimize focused window |
-| `window-maximize` | on | toggle maximize on focused window |
-| `window-close` | on | close focused window |
+| Channel             | Type         | Notes                                                                         |
+| ------------------- | ------------ | ----------------------------------------------------------------------------- |
+| `ping`              | handle       | returns `"pong"`                                                              |
+| `get-settings`      | handle       | returns in-memory `settingsStore`                                             |
+| `save-settings`     | handle       | merges + writes `settings.json`                                               |
+| `test-connection`   | handle       | GET `/api/libraries` with Bearer token                                        |
+| `get-libraries`     | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                            |
+| `get-books`         | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                      |
+| `detect-kindles`    | handle       | 3-tier detection: GVFS → kmtpd → jmtpfs                                       |
+| `send-to-kindle`    | handle       | downloads EPUB to tmp, calls `copyToKindle`, emits `transfer-progress` events |
+| `transfer-progress` | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                  |
+| `window-minimize`   | on           | minimize focused window                                                       |
+| `window-maximize`   | on           | toggle maximize on focused window                                             |
+| `window-close`      | on           | close focused window                                                          |
+
+### Transfer progress `status` values
+
+| Status             | Meaning                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `downloading`      | Fetching EPUB from ABS server                              |
+| `copying`          | Writing file to Kindle                                     |
+| `done`             | File confirmed on device                                   |
+| `error`            | Generic failure                                            |
+| `dolphin-blocking` | Non-KDE: file manager holds MTP device; user must close it |
+
+## Kindle Detection — 3-Tier Chain (`detect-kindles`)
+
+Detection runs in priority order; first non-empty result wins:
+
+| Tier | Function              | Works On                                                                       |
+| ---- | --------------------- | ------------------------------------------------------------------------------ |
+| 1    | `findKindleMounts()`  | GVFS FUSE (`/run/user/<uid>/gvfs/`) + USB mass storage + Windows drive letters |
+| 2    | `findKmtpdDevices()`  | KDE — queries `org.kde.kiod6` D-Bus (kmtpd module)                             |
+| 3    | `findJmtpfsDevices()` | Non-KDE Linux — mounts via `jmtpfs` FUSE                                       |
+
+### `findKmtpdDevices()` detail
+
+- D-Bus service: `org.kde.kiod6`, object paths `/modules/kmtpd/device0`, `/modules/kmtpd/device0/storage0`
+- Reads `org.kde.kmtp.Device.friendlyName` and `org.kde.kmtp.Storage.description` via `dbus-send`
+- Builds `kioDocumentsUri = "mtp:/<friendlyName>/<storageName>/documents"`
+- Verifies `documents/` exists with `kioclient5 ls <kioDocumentsUri>`
+- Returns `{ name, storageName, documentsPath, kioDocumentsUri, bookCount, via: "kmtpd" }`
+
+### Device object shapes
+
+```js
+// kmtpd (KDE)
+{ name, storageName, documentsPath, kioDocumentsUri, bookCount, via: "kmtpd" }
+
+// GVFS / USB / jmtpfs
+{ name, path, documentsPath, bookCount }   // built by buildDeviceEntry()
+```
+
+## Copy Strategy — `copyToKindle(srcPath, destPath, device)`
+
+```
+if device.via === "kmtpd"
+  → kioclient5 --noninteractive --overwrite copy file://<srcPath> <kioDocumentsUri>/<filename>
+else
+  → fs.copyFileSync(srcPath, destPath)          // GVFS mount / USB mass storage
+  → on ENOENT/EXDEV: gio copy <srcPath> <destPath>   // gio fallback
+  → on failure: throw DOLPHIN_BLOCKING_ERROR sentinel
+```
+
+- **`DOLPHIN_BLOCKING_ERROR`** constant (`"DOLPHIN_BLOCKING"`) — caught in `send-to-kindle` handler, emits `{ status: "dolphin-blocking" }` progress event and breaks the batch early
+- `kioclient5` works alongside `kiod6`/`kmtpd` — no need to kill or disable the KDE I/O daemon
 
 ## Linux Protocol Handler
 
@@ -82,6 +151,8 @@ The `.desktop` `Exec` line always invokes the wrapper script — no dev/prod spl
   #nav-library   → shows #view-library
   #nav-settings  → shows #view-settings
   #devices-section  Kindle device list + refresh button
+    .device-entry       normal detected device
+    .device-busy        device held by file manager (non-KDE only)
 #content
   #view-library  #book-grid
   #view-settings
@@ -100,3 +171,5 @@ The `.desktop` `Exec` line always invokes the wrapper script — no dev/prod spl
 - `app.commandLine.appendSwitch("disable-gpu-vsync")` suppresses VSync log noise
 - `requestSingleInstanceLock()` enforced — second instance quits immediately
 - `http`/`https` used for outbound requests (not `electron.net`); `rejectUnauthorized: false` on `test-connection` to tolerate self-signed certs
+- **Never kill `kiod6`** — it owns the USB MTP interface on KDE; killing it drops the Kindle connection entirely
+- No udev rules required — `kioclient5` works within the existing KDE MTP session
