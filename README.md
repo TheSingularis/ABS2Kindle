@@ -59,7 +59,21 @@ Kindles connect via MTP. ABS2Kindle tries three detection methods in order, auto
    ```sh
    npm start
    ```
-3. Open **Settings**, enter your Audiobookshelf server URL and API key, and click **Save**
+3. Open **Settings**, enter your Audiobookshelf server URL and choose an auth method:
+
+   The **Server URL** field auto-saves after you stop typing — a green ✓ badge confirms it was saved. If the URL doesn't respond as a valid ABS server, a red ✗ badge is shown and the URL is not saved.
+
+   **API Key** (default)
+   - Paste your ABS API key into the *API Key* field and click **Save**
+   - You can find your key in ABS → Config → Users → *your account*
+
+   **OIDC / SSO**
+   - Switch the toggle to *OIDC / SSO*
+   - The server URL is saved automatically once validated; click **Sign in with SSO**
+   - A browser window will open showing your server's login page
+   - Log in as normal — the app captures the token automatically and saves it
+   - The OIDC option is only available if your ABS server has OpenID Connect configured (ABS Settings → Authentication → OpenID Connect)
+
 4. Plug in your Kindle and click **↻ Refresh** in the Devices panel
 
 ## Transfer Pipeline

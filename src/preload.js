@@ -9,7 +9,12 @@ contextBridge.exposeInMainWorld("api", {
   // Settings
   getSettings: () => ipcRenderer.invoke("get-settings"),
   saveSettings: (data) => ipcRenderer.invoke("save-settings", data),
+  pingServer: (opts) => ipcRenderer.invoke("ping-server", opts),
   testConnection: (opts) => ipcRenderer.invoke("test-connection", opts),
+  checkOidcAvailable: (opts) => ipcRenderer.invoke("check-oidc-available", opts),
+
+  // OIDC auth — opens a modal browser window with the ABS OIDC flow
+  startOidcLogin: (opts) => ipcRenderer.invoke("start-oidc-login", opts),
 
   // Libraries
   getLibraries: () => ipcRenderer.invoke("get-libraries"),

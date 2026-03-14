@@ -753,3 +753,145 @@ button.secondary:hover {
     color: #4caf7d;
     font-size: 12px;
 }
+
+/* ── Auth settings — URL saved badge ───────────────────────── */
+.url-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.url-input-wrap input {
+    flex: 1;
+    padding-right: 28px; /* room for the badge */
+}
+
+.url-saved-badge {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+.url-saved-badge.visible {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.url-saved-badge svg {
+    width: 13px;
+    height: 13px;
+    stroke: #4caf7d;
+    stroke-width: 2.5;
+}
+
+.url-saved-badge.err svg {
+    stroke: #e05555;
+}
+
+/* ── Auth method pill toggle ───────────────────────────────── */
+.auth-pill-toggle {
+    margin: 14px 0 16px;
+}
+
+.auth-pill-track {
+    position: relative;
+    display: inline-flex;
+    background: #1a1a1f;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 0;
+}
+
+.auth-pill-slider {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    height: calc(100% - 6px);
+    border-radius: 6px;
+    background: var(--accent);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+                width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform, width;
+    z-index: 0;
+}
+
+.auth-pill-btn {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    transition: color 0.18s;
+    white-space: nowrap;
+}
+
+.auth-pill-btn:hover:not(.active) {
+    color: var(--text);
+    opacity: 1;
+}
+
+.auth-pill-btn.active {
+    color: #000;
+}
+
+/* ── Auth panels — sliding container ───────────────────────── */
+.auth-panels-clip {
+    overflow: hidden;
+    /* Needed so child 50% values resolve against this box, not the track. */
+    width: 100%;
+}
+
+.auth-panels-track {
+    display: flex;
+    /* Each panel is one full clip-width wide, so the track is 200% total. */
+    width: 200%;
+    transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+}
+
+.auth-panels-track.show-oidc {
+    transform: translateX(-50%);
+}
+
+.auth-panel {
+    /* 50% of the 200%-wide track = one full clip-container width. */
+    flex: 0 0 50%;
+    min-width: 0;
+}
+
+/* ── OIDC panel specifics ──────────────────────────────────── */
+.oidc-hint {
+    font-size: 12px;
+    color: var(--text2);
+    margin: 0 0 12px;
+    line-height: 1.6;
+    max-width: 380px;
+}
+
+#oidc-result {
+    font-size: 12px;
+    color: var(--text2);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+#oidc-result.ok {
+    color: #4caf7d;
+}
+
+#oidc-result.err {
+    color: #e05555;
+}
