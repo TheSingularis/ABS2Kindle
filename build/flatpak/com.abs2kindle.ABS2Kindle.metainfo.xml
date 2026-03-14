@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.abs2kindle.ABS2Kindle</id>
+
+  <name>ABS2Kindle</name>
+  <summary>Send ebooks from Audiobookshelf to your Kindle</summary>
+
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      ABS2Kindle connects your Audiobookshelf server to a connected Kindle device.
+      Browse your library, select ebooks, and send them directly to your Kindle —
+      automatically converting EPUB to AZW3 via Calibre and injecting the correct
+      ASIN so Whispersync works.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Browse Audiobookshelf libraries and Home shelves</li>
+      <li>Auto-detects connected Kindle devices (KDE/kmtpd, GNOME/GVFS, jmtpfs)</li>
+      <li>Converts EPUB → AZW3 with ASIN injection for Whispersync</li>
+      <li>Transfer progress overlay with per-book status</li>
+      <li>Shows which books are already on the device</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.abs2kindle.ABS2Kindle.desktop</launchable>
+
+  <url type="homepage">https://github.com/TheSingularis/ABS2Kindle</url>
+  <url type="bugtracker">https://github.com/TheSingularis/ABS2Kindle/issues</url>
+
+  <provides>
+    <binary>abs2kindle</binary>
+  </provides>
+
+  <releases>
+    <release version="0.1.0" date="2026-03-14">
+      <description>
+        <p>Initial release featuring transfer progress overlay, concurrent transfers,
+        Home view with personalized shelves, ASIN and on-Kindle badges, and search
+        preservation across library refreshes.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

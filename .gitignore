@@ -20,7 +20,6 @@ pids/
 
 # Build outputs
 dist/
-build/
 out/
 release/
 .release/
@@ -39,8 +38,11 @@ release/
 *.asar
 *.asar.unpack
 
-# Compiled binary addons
+# Compiled binary addons (node-gyp)
 build/Release/
+
+# Flatpak — generated offline npm source manifest (produced by flatpak-node-generator)
+build/flatpak/generated-sources.json
 
 # Environment files
 .env

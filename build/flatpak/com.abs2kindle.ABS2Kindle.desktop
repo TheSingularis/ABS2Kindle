@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=ABS2Kindle
+Comment=Send ebooks from Audiobookshelf to your Kindle
+Exec=abs2kindle %U
+Icon=com.abs2kindle.ABS2Kindle
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/abs2kindle;
+StartupWMClass=ABS2Kindle

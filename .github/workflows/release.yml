@@ -58,6 +58,8 @@ jobs:
                   path: |
                       dist/*.AppImage
                       dist/*.deb
+                      dist/*.rpm
+                      dist/*.pkg.tar.zst
                       dist/*.exe
                   if-no-files-found: error
 

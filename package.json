@@ -1,6 +1,6 @@
 {
   "name": "abs2kindle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Send ebooks from Audiobookshelf to your Kindle",
   "author": {
     "name": "TheSingularis",
@@ -25,7 +25,9 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "rpm",
+        "pacman"
       ]
     },
     "win": {
