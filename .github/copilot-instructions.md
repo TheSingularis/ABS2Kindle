@@ -1,5 +1,9 @@
 # ABS2Kindle — Copilot Instructions
 
+## General Rules
+
+- **Always update `README.md`** after any major changes (new features, changed behaviour, updated setup steps, new dependencies, etc.).
+
 ## Project
 
 Electron app that connects an Audiobookshelf (ABS) server to a Kindle.

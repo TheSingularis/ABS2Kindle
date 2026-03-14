@@ -5,14 +5,24 @@ Send ebooks from your [Audiobookshelf](https://www.audiobookshelf.org/) library 
 ## Features
 
 - Browse your ABS library and select books to send
-- Auto-detects connected Kindle devices
-- Transfers EPUB files directly to the Kindle's documents folder
+- Auto-detects connected Kindle devices (KDE, GNOME, and other Linux desktops)
+- Converts EPUB → AZW3 via Calibre ebook-convert before transfer
+- Injects the book's ASIN into the AZW3 so it matches your Kindle library
+- Transfers the AZW3 directly to the Kindle's documents folder
 
 ## Requirements
 
 ### Runtime
 
 - [Electron](https://www.electronjs.org/) — must be available on `PATH` or set in `package.json`
+- [Calibre](https://calibre-ebook.com/) (`ebook-convert`) — required for EPUB → AZW3 conversion
+
+| Distro | Command |
+|---|---|
+| Arch / Manjaro | `sudo pacman -S calibre` |
+| Debian / Ubuntu | `sudo apt install calibre` |
+| Fedora | `sudo dnf install calibre` |
+| NixOS | Add `calibre` to `environment.systemPackages`, then `sudo nixos-rebuild switch` |
 
 ### Kindle detection (Linux)
 
@@ -51,6 +61,18 @@ Kindles connect via MTP. ABS2Kindle tries three detection methods in order, auto
    ```
 3. Open **Settings**, enter your Audiobookshelf server URL and API key, and click **Save**
 4. Plug in your Kindle and click **↻ Refresh** in the Devices panel
+
+## Transfer Pipeline
+
+When you send a book, ABS2Kindle runs these steps automatically:
+
+1. **Fetch metadata** — retrieves title and ASIN from the ABS server
+2. **Download EPUB** — downloads the ebook from ABS to a temp file
+3. **Convert** — runs `ebook-convert` (Calibre) to produce an AZW3 optimised for Kindle Paperwhite (`--output-profile=kindle_pw3`)
+4. **Inject ASIN** — patches the EXTH block of the AZW3 in-place so Kindle matches it to your library (skipped if the item has no ASIN in ABS)
+5. **Copy to Kindle** — transfers the AZW3 to the Kindle's documents folder
+
+Progress for each step is shown in the UI next to the book.
 
 ## Troubleshooting
 
