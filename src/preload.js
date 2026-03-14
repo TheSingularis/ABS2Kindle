@@ -11,8 +11,18 @@ contextBridge.exposeInMainWorld("api", {
   saveSettings: (data) => ipcRenderer.invoke("save-settings", data),
   testConnection: (opts) => ipcRenderer.invoke("test-connection", opts),
 
-  // Auth
-  startOidc: (opts) => ipcRenderer.invoke("start-oidc", opts),
-  onOidcSuccess: (cb) => ipcRenderer.on("oidc-success", (_, data) => cb(data)),
-  onOidcError: (cb) => ipcRenderer.on("oidc-error", (_, err) => cb(err)),
+  // Libraries
+  getLibraries: () => ipcRenderer.invoke("get-libraries"),
+  getBooks: (opts) => ipcRenderer.invoke("get-books", opts),
+
+  // Kindle
+  detectKindles: () => ipcRenderer.invoke("detect-kindles"),
+  sendToKindle: (opts) => ipcRenderer.invoke("send-to-kindle", opts),
+  listKindleBooks: (opts) => ipcRenderer.invoke("list-kindle-books", opts),
+  deleteKindleBook: (opts) => ipcRenderer.invoke("delete-kindle-book", opts),
+  onTransferProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("transfer-progress", handler);
+    return () => ipcRenderer.removeListener("transfer-progress", handler);
+  },
 });

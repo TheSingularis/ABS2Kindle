@@ -1,0 +1,16 @@
+{
+  "actionButtons": {
+    "reloadButton": null,
+    "commands": [
+      {
+        "name": "$(triangle-right) Run Electron",
+        "color": "green",
+        "command": "pkill -f '/run/current-system/sw/bin/electron' ; npm start",
+        "singleInstance": true
+      }
+    ]
+},
+"github-actions.workflows.pinned.workflows": [
+    ".github/workflows/release.yml"
+]
+}
