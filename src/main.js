@@ -7,7 +7,11 @@ const https = require("https");
 
 const { settingsStore, loadSettings, saveSettings } = require("./lib/settings");
 const { absRequest, downloadFile } = require("./lib/abs-client");
-const { findKindleMounts, findKmtpdDevices, findJmtpfsDevices } = require("./lib/kindle-detect");
+const {
+  findKindleMounts,
+  findKmtpdDevices,
+  findJmtpfsDevices,
+} = require("./lib/kindle-detect");
 const {
   DOLPHIN_BLOCKING_ERROR,
   convertEpubToAzw3,
@@ -172,7 +176,7 @@ ipcMain.handle("get-books", async (_, { libraryId }) => {
 });
 
 // ── IPC: Kindle detection ─────────────────────────────────────
-ipcMain.handle('detect-kindles', () => {
+ipcMain.handle("detect-kindles", () => {
   // 1. GVFS / USB mass storage (GNOME and non-KDE)
   const found = findKindleMounts();
   if (found.length > 0) return found;
@@ -182,9 +186,9 @@ ipcMain.handle('detect-kindles', () => {
   if (kmtpd.length > 0) return kmtpd;
 
   // 3. jmtpfs FUSE (non-KDE fallback)
-  const { execSync } = require('child_process');
+  const { execSync } = require("child_process");
   try {
-    execSync('which jmtpfs', { stdio: 'ignore' });
+    execSync("which jmtpfs", { stdio: "ignore" });
     return findJmtpfsDevices();
   } catch {
     return [];
@@ -223,7 +227,7 @@ ipcMain.handle(
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
 
         // ── Step 2: download EPUB to tmp ──────────────────────
-        epubPath = path.join(tmpDir, `abs2kindle_${safeTitle}.epub`);
+        epubPath = path.join(tmpDir, `${safeTitle}.epub`);
         await downloadFile(
           `${serverUrl}/api/items/${itemId}/ebook`,
           apiKey,
@@ -232,7 +236,7 @@ ipcMain.handle(
 
         // ── Step 3: convert EPUB → AZW3 ──────────────────────
         progress("converting", { title });
-        azw3Path = path.join(tmpDir, `abs2kindle_${safeTitle}.azw3`);
+        azw3Path = path.join(tmpDir, `${safeTitle}.azw3`);
         convertEpubToAzw3(epubPath, azw3Path);
         fs.unlinkSync(epubPath);
         epubPath = null;
@@ -241,7 +245,9 @@ ipcMain.handle(
         if (asin) {
           injectAsinIntoAzw3(azw3Path, asin);
         } else {
-          console.warn(`send-to-kindle: no ASIN for "${title}" — skipping injection`);
+          console.warn(
+            `send-to-kindle: no ASIN for "${title}" — skipping injection`,
+          );
         }
 
         // ── Step 5: copy AZW3 to Kindle ───────────────────────
@@ -255,8 +261,12 @@ ipcMain.handle(
         results.push({ itemId, title, ok: true });
       } catch (e) {
         // Best-effort cleanup of any leftover tmp files
-        try { if (epubPath && fs.existsSync(epubPath)) fs.unlinkSync(epubPath); } catch (_) {}
-        try { if (azw3Path && fs.existsSync(azw3Path)) fs.unlinkSync(azw3Path); } catch (_) {}
+        try {
+          if (epubPath && fs.existsSync(epubPath)) fs.unlinkSync(epubPath);
+        } catch (_) {}
+        try {
+          if (azw3Path && fs.existsSync(azw3Path)) fs.unlinkSync(azw3Path);
+        } catch (_) {}
 
         const isDolphinBlocking = e.message === DOLPHIN_BLOCKING_ERROR;
         progress(isDolphinBlocking ? "dolphin-blocking" : "error", {
@@ -313,14 +323,18 @@ ipcMain.handle("delete-kindle-book", async (_, { device, filename }) => {
   const { execSync } = require("child_process");
 
   // Reject path traversal attempts
-  if (filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
+  if (
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    filename.includes("..")
+  ) {
     return { ok: false, error: "Invalid filename" };
   }
 
   try {
     if (device.via === "kmtpd") {
       const kioUri = `${device.kioDocumentsUri}/${filename}`;
-      execSync(`kioclient5 --noninteractive del "${kioUri}"`, {
+      execSync(`kioclient5 --noninteractive remove "${kioUri}"`, {
         encoding: "utf8",
         timeout: 10000,
       });
@@ -335,7 +349,9 @@ ipcMain.handle("delete-kindle-book", async (_, { device, filename }) => {
 });
 
 // ── Window controls ───────────────────────────────────────────
-ipcMain.on("window-minimize", () => BrowserWindow.getFocusedWindow()?.minimize());
+ipcMain.on("window-minimize", () =>
+  BrowserWindow.getFocusedWindow()?.minimize(),
+);
 ipcMain.on("window-maximize", () => {
   const win = BrowserWindow.getFocusedWindow();
   win?.isMaximized() ? win.unmaximize() : win.maximize();
