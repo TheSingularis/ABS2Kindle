@@ -35,7 +35,7 @@ jobs:
               run: |
                   TAG="${{ github.ref_name }}"
                   VERSION="${TAG#v}"
-                  npm version "$VERSION" --no-git-tag-version
+                  npm version "$VERSION" --no-git-tag-version --allow-same-version
 
             - name: Cache electron
               uses: actions/cache@v4
