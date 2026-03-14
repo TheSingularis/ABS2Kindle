@@ -149,19 +149,49 @@
                             <h2>Server Settings</h2>
 
                             <label>Server URL
-                                <input type="text" id="input-url" placeholder="http://192.168.1.10:13378" />
+                                <div class="url-input-wrap">
+                                    <input type="text" id="input-url" placeholder="http://192.168.1.10:13378" />
+                                    <span id="url-saved-badge" class="url-saved-badge" aria-hidden="true">
+                                        <svg viewBox="0 0 16 16"><use href="#icon-check"></use></svg>
+                                    </span>
+                                </div>
                             </label>
 
-                            <!-- API key fields -->
-                            <div id="auth-apikey">
-                                <label>API Key
-                                    <input type="password" id="input-apikey" placeholder="your-api-key" />
-                                </label>
-                                <br>
-                                <div class="form-row">
-                                    <button id="btn-save">Save</button>
-                                    <button id="btn-test" class="secondary">Test Connection</button>
-                                    <span id="test-result"></span>
+                            <!-- Auth method pill toggle -->
+                            <div class="auth-pill-toggle" id="auth-pill-toggle">
+                                <div class="auth-pill-track">
+                                    <div class="auth-pill-slider" id="auth-pill-slider"></div>
+                                    <button class="auth-pill-btn active" id="pill-btn-apikey" data-method="apikey">API Key</button>
+                                    <button class="auth-pill-btn" id="pill-btn-oidc" data-method="oidc">OIDC / SSO</button>
+                                </div>
+                            </div>
+
+                            <!-- Auth panels wrapper (clips overflow during slide) -->
+                            <div class="auth-panels-clip">
+                                <div class="auth-panels-track" id="auth-panels-track">
+
+                                    <!-- API key panel -->
+                                    <div class="auth-panel" id="auth-apikey">
+                                        <label>API Key
+                                            <input type="password" id="input-apikey" placeholder="your-api-key" />
+                                        </label>
+                                        <br>
+                                        <div class="form-row">
+                                            <button id="btn-save">Save</button>
+                                            <button id="btn-test" class="secondary">Test Connection</button>
+                                            <span id="test-result"></span>
+                                        </div>
+                                    </div>
+
+                                    <!-- OIDC panel -->
+                                    <div class="auth-panel" id="auth-oidc">
+                                        <p class="oidc-hint">Click <strong>Sign in with SSO</strong> to open the server's login page. The API token will be retrieved automatically and saved.</p>
+                                        <div class="form-row">
+                                            <button id="btn-oidc-login" class="hidden">Sign in with SSO</button>
+                                        </div>
+                                        <span id="oidc-result"></span>
+                                    </div>
+
                                 </div>
                             </div>
 

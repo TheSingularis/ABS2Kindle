@@ -1,9 +1,10 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 
 const { settingsStore, loadSettings, saveSettings } = require("./lib/settings");
 const { absRequest, downloadFile } = require("./lib/abs-client");
@@ -104,6 +105,82 @@ ipcMain.handle("save-settings", (_, data) => {
   return { ok: true };
 });
 
+// Hits the public /ping endpoint — no auth required.
+// Returns { ok: true } when the server responds with { "success": true }.
+ipcMain.handle("ping-server", async (_, { serverUrl }) => {
+  return new Promise((resolve) => {
+    try {
+      const url = new URL(`${serverUrl}/ping`);
+      const lib = url.protocol === "https:" ? https : http;
+      const req = lib.request(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: "GET",
+          rejectUnauthorized: false,
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (c) => (data += c));
+          res.on("end", () => {
+            try {
+              const json = JSON.parse(data);
+              if (json?.success === true) resolve({ ok: true });
+              else resolve({ ok: false, error: "Not an ABS server" });
+            } catch {
+              resolve({ ok: false, error: "Could not parse response" });
+            }
+          });
+        },
+      );
+      req.on("error", (e) => resolve({ ok: false, error: e.message }));
+      req.end();
+    } catch (e) {
+      resolve({ ok: false, error: e.message });
+    }
+  });
+});
+
+// Hits the public /status endpoint — no auth required.
+// Returns { available: true } when the server's authActiveAuthMethods includes "openid".
+ipcMain.handle("check-oidc-available", async (_, { serverUrl }) => {
+  return new Promise((resolve) => {
+    try {
+      const url = new URL(`${serverUrl}/status`);
+      const lib = url.protocol === "https:" ? https : http;
+      const req = lib.request(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: "GET",
+          rejectUnauthorized: false,
+        },
+        (res) => {
+          let data = "";
+          res.on("data", (c) => (data += c));
+          res.on("end", () => {
+            try {
+              const json = JSON.parse(data);
+              const methods = json?.authMethods;
+              resolve({
+                available: Array.isArray(methods) && methods.includes("openid"),
+              });
+            } catch {
+              resolve({ available: false });
+            }
+          });
+        },
+      );
+      req.on("error", () => resolve({ available: false }));
+      req.end();
+    } catch {
+      resolve({ available: false });
+    }
+  });
+});
+
 ipcMain.handle("test-connection", async (_, { serverUrl, apiKey }) => {
   return new Promise((resolve) => {
     try {
@@ -137,6 +214,171 @@ ipcMain.handle("test-connection", async (_, { serverUrl, apiKey }) => {
       req.end();
     } catch (e) {
       resolve({ ok: false, error: e.message });
+    }
+  });
+});
+
+// ── IPC: OIDC Login ───────────────────────────────────────────
+// Opens the ABS OIDC flow in a dedicated BrowserWindow.
+// Uses PKCE (S256) as required by the ABS OAuth2 implementation.
+// On success emits "oidc-token" to the renderer with the user's API token.
+
+// PKCE helpers (Node built-ins only, no extra deps)
+function generateVerifier() {
+  return crypto.randomBytes(40).toString("hex"); // 80-char hex → >256 bits
+}
+
+function generateChallenge(verifier) {
+  return crypto
+    .createHash("sha256")
+    .update(verifier)
+    .digest("base64url"); // base64url without padding
+}
+
+function generateState() {
+  return crypto.randomBytes(20).toString("hex");
+}
+
+ipcMain.handle("start-oidc-login", async (event, { serverUrl }) => {
+  const verifier = generateVerifier();
+  const challenge = generateChallenge(verifier);
+  const state = generateState();
+
+  // Use a dedicated, isolated session so OIDC cookies don't bleed into the
+  // main app session and can be cleaned up completely afterwards.
+  const oidcSession = session.fromPartition("persist:oidc-flow", {
+    cache: false,
+  });
+
+  // Build the initial /auth/openid URL — ABS will 302-redirect to the IdP,
+  // and after login the IdP posts back to /auth/openid/mobile-redirect which
+  // in turn 302-redirects to abs2kindle://callback?code=…&state=…
+  const authUrl = new URL(`${serverUrl}/auth/openid`);
+  authUrl.searchParams.set("code_challenge", challenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("redirect_uri", "abs2kindle://callback");
+  authUrl.searchParams.set("client_id", "ABS2Kindle");
+  authUrl.searchParams.set("state", state);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      // Clean up the OIDC session cookies so stale state never affects future flows.
+      oidcSession.clearStorageData().catch(() => {});
+      if (!win.isDestroyed()) win.close();
+      resolve(result);
+    };
+
+    const win = new BrowserWindow({
+      width: 900,
+      height: 700,
+      parent: mainWindow,
+      modal: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        session: oidcSession,
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    // Intercept the abs2kindle://callback redirect that the ABS mobile-redirect
+    // endpoint issues after the IdP logs the user in.
+    win.webContents.on("will-navigate", (e, navUrl) => {
+      if (!navUrl.startsWith("abs2kindle://callback")) return;
+      e.preventDefault();
+      handleCallback(navUrl);
+    });
+
+    // Electron also fires will-redirect for 302 responses; cover that path too.
+    win.webContents.on("will-redirect", (e, navUrl) => {
+      if (!navUrl.startsWith("abs2kindle://callback")) return;
+      e.preventDefault();
+      handleCallback(navUrl);
+    });
+
+    win.on("closed", () => {
+      if (!settled) finish({ ok: false, error: "Login window was closed" });
+    });
+
+    win.loadURL(authUrl.toString()).catch((err) => {
+      finish({ ok: false, error: err.message });
+    });
+
+    async function handleCallback(callbackUrl) {
+      try {
+        const parsed = new URL(callbackUrl);
+        const returnedState = parsed.searchParams.get("state");
+        const code = parsed.searchParams.get("code");
+
+        if (returnedState !== state) {
+          return finish({ ok: false, error: "OIDC state mismatch — possible CSRF" });
+        }
+        if (!code) {
+          return finish({ ok: false, error: "No code received in callback" });
+        }
+
+        // Exchange the code for a token via /auth/openid/callback.
+        // The session cookies from the /auth/openid request must accompany this
+        // call — we pull them from the OIDC session's cookie store.
+        const serverOrigin = new URL(serverUrl).origin;
+        const cookieList = await oidcSession.cookies.get({ url: serverOrigin });
+        const cookieHeader = cookieList
+          .map((c) => `${c.name}=${c.value}`)
+          .join("; ");
+
+        const tokenUrl = new URL(`${serverUrl}/auth/openid/callback`);
+        tokenUrl.searchParams.set("state", state);
+        tokenUrl.searchParams.set("code", code);
+        tokenUrl.searchParams.set("code_verifier", verifier);
+
+        const tokenResult = await new Promise((res, rej) => {
+          const parsed2 = tokenUrl;
+          const lib2 = parsed2.protocol === "https:" ? https : http;
+          const req = lib2.request(
+            {
+              hostname: parsed2.hostname,
+              port: parsed2.port || (parsed2.protocol === "https:" ? 443 : 80),
+              path: parsed2.pathname + parsed2.search,
+              method: "GET",
+              headers: {
+                Cookie: cookieHeader,
+                Accept: "application/json",
+              },
+              rejectUnauthorized: false,
+            },
+            (r) => {
+              let data = "";
+              r.on("data", (c) => (data += c));
+              r.on("end", () => {
+                try {
+                  res({ status: r.statusCode, body: JSON.parse(data) });
+                } catch {
+                  res({ status: r.statusCode, body: data });
+                }
+              });
+            },
+          );
+          req.on("error", rej);
+          req.end();
+        });
+
+        const token = tokenResult.body?.user?.token;
+        if (!token) {
+          const msg =
+            typeof tokenResult.body === "string"
+              ? tokenResult.body
+              : (tokenResult.body?.error ?? `HTTP ${tokenResult.status}`);
+          return finish({ ok: false, error: `Token exchange failed: ${msg}` });
+        }
+
+        finish({ ok: true, token });
+      } catch (err) {
+        finish({ ok: false, error: err.message });
+      }
     }
   });
 });

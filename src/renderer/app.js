@@ -46,7 +46,14 @@ document.getElementById("nav-library").addEventListener("click", () => {
 });
 document
   .getElementById("nav-settings")
-  .addEventListener("click", () => showView("settings"));
+  .addEventListener("click", () => {
+    showView("settings");
+    // Re-position the slider now that the panel is visible and has layout.
+    requestAnimationFrame(() => {
+      const active = document.querySelector(".auth-pill-btn.active");
+      if (active) positionPillSlider(active);
+    });
+  });
 
 // ── Kindle Detection ──────────────────────────────────────────
 let detectedKindles = [];
@@ -534,13 +541,123 @@ document.getElementById("btn-send").addEventListener("click", async () => {
 });
 
 // ── Settings & Auth ───────────────────────────────────────────
+
+// ── Pill toggle ───────────────────────────────────────────────
+// Positions the sliding highlight under the active pill button.
+function positionPillSlider(activeBtn) {
+  const track = activeBtn.closest(".auth-pill-track");
+  const slider = track.querySelector(".auth-pill-slider");
+  slider.style.width = `${activeBtn.offsetWidth}px`;
+  slider.style.transform = `translateX(${activeBtn.offsetLeft - 3}px)`;
+}
+
+function setAuthMethod(method) {
+  const isOidc = method === "oidc";
+  const apikeyBtn = document.getElementById("pill-btn-apikey");
+  const oidcBtn = document.getElementById("pill-btn-oidc");
+  const track = document.getElementById("auth-panels-track");
+  const oidcLoginBtn = document.getElementById("btn-oidc-login");
+
+  apikeyBtn.classList.toggle("active", !isOidc);
+  oidcBtn.classList.toggle("active", isOidc);
+  track.classList.toggle("show-oidc", isOidc);
+  // Hide the SSO button when the API Key panel is active
+  oidcLoginBtn.classList.toggle("hidden", !isOidc);
+
+  positionPillSlider(isOidc ? oidcBtn : apikeyBtn);
+}
+
+// Enable or disable the "Sign in with SSO" button based on server capability.
+// The pill toggle itself is always clickable; the button inside the OIDC panel
+// is what gets greyed out when the server doesn't have OIDC configured.
+function setOidcPillAvailable(available) {
+  const oidcLoginBtn = document.getElementById("btn-oidc-login");
+  const oidcResult = document.getElementById("oidc-result");
+  oidcLoginBtn.disabled = !available;
+  if (!available) {
+    oidcResult.innerHTML = `${iconHtml("x")} This server does not have OIDC / SSO configured. Make sure you're running ABS 3.5+ and that OIDC is set up correctly.`;
+    oidcResult.className = "err";
+  } else {
+    // Clear any stale "not configured" message; leave success messages intact.
+    if (oidcResult.className === "err" && oidcResult.textContent.includes("OIDC")) {
+      oidcResult.textContent = "";
+      oidcResult.className = "";
+    }
+  }
+}
+
+// Pill button clicks
+document.getElementById("pill-btn-apikey").addEventListener("click", () => {
+  setAuthMethod("apikey");
+});
+document.getElementById("pill-btn-oidc").addEventListener("click", () => {
+  setAuthMethod("oidc");
+});
+
+// ── URL auto-save ─────────────────────────────────────────────
+let urlSaveTimer = null;
+const urlSavedBadge = document.getElementById("url-saved-badge");
+
+function flashUrlSaved(ok) {
+  urlSavedBadge.classList.remove("visible", "err");
+  // Swap the icon to match the outcome.
+  urlSavedBadge.querySelector("use").setAttribute("href", ok ? "#icon-check" : "#icon-x");
+  // Force reflow so re-adding the class re-triggers the CSS transition.
+  void urlSavedBadge.offsetWidth;
+  urlSavedBadge.classList.toggle("err", !ok);
+  urlSavedBadge.classList.add("visible");
+  clearTimeout(urlSavedBadge._hideTimer);
+  urlSavedBadge._hideTimer = setTimeout(() => {
+    urlSavedBadge.classList.remove("visible");
+  }, 2000);
+}
+
+document.getElementById("input-url").addEventListener("input", () => {
+  clearTimeout(urlSaveTimer);
+  // Hide badge while the user is still typing.
+  urlSavedBadge.classList.remove("visible");
+  // Immediately disable OIDC pill whenever the URL changes — it will be
+  // re-enabled only if the new URL turns out to be a valid ABS server with
+  // OIDC configured.
+  setOidcPillAvailable(false);
+
+  urlSaveTimer = setTimeout(async () => {
+    const serverUrl = document
+      .getElementById("input-url")
+      .value.trim()
+      .replace(/\/$/, "");
+
+    if (!serverUrl) return;
+
+    // Validate that the URL points to a real ABS instance before saving.
+    const ping = await window.api.pingServer({ serverUrl });
+    if (!ping.ok) {
+      flashUrlSaved(false);
+      return;
+    }
+
+    // Check whether the server has OIDC enabled and update the pill accordingly.
+    const oidcCheck = await window.api.checkOidcAvailable({ serverUrl });
+    setOidcPillAvailable(oidcCheck.available);
+
+    const currentMethod = document
+      .getElementById("pill-btn-oidc")
+      .classList.contains("active")
+      ? "oidc"
+      : "apikey";
+    await window.api.saveSettings({ serverUrl, authMethod: currentMethod });
+    flashUrlSaved(true);
+  }, 800);
+});
+
+// ── API Key panel ─────────────────────────────────────────────
 document.getElementById("btn-save").addEventListener("click", async () => {
   const serverUrl = document
     .getElementById("input-url")
     .value.trim()
     .replace(/\/$/, "");
   const apiKey = document.getElementById("input-apikey").value.trim();
-  await window.api.saveSettings({ serverUrl, apiKey });
+  await window.api.saveSettings({ serverUrl, apiKey, authMethod: "apikey" });
   document.getElementById("test-result").textContent = "Saved.";
   document.getElementById("test-result").className = "ok";
 });
@@ -564,6 +681,47 @@ document.getElementById("btn-test").addEventListener("click", async () => {
   }
 });
 
+// ── OIDC panel ────────────────────────────────────────────────
+document.getElementById("btn-oidc-login").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-oidc-login");
+  const el = document.getElementById("oidc-result");
+  const serverUrl = document
+    .getElementById("input-url")
+    .value.trim()
+    .replace(/\/$/, "");
+
+  if (!serverUrl) {
+    el.innerHTML = `${iconHtml("x")} Enter the Server URL first.`;
+    el.className = "err";
+    return;
+  }
+
+  btn.disabled = true;
+  el.textContent = "Opening login window…";
+  el.className = "";
+
+  const result = await window.api.startOidcLogin({ serverUrl });
+
+  btn.disabled = false;
+
+  if (result.ok) {
+    // Persist the token as apiKey so all existing API calls continue to work.
+    await window.api.saveSettings({
+      serverUrl,
+      apiKey: result.token,
+      authMethod: "oidc",
+    });
+    settingsForRenderer = await window.api.getSettings();
+    el.innerHTML = `${iconHtml("check")} Signed in successfully.`;
+    el.className = "ok";
+    // Trigger library load now that we have a valid token.
+    loadLibrary();
+  } else {
+    el.innerHTML = `${iconHtml("x")} ${result.error}`;
+    el.className = "err";
+  }
+});
+
 // ── Startup ───────────────────────────────────────────────────
 async function loadSettingsIntoForm() {
   settingsForRenderer = await window.api.getSettings();
@@ -572,6 +730,19 @@ async function loadSettingsIntoForm() {
   }
   if (settingsForRenderer.apiKey) {
     document.getElementById("input-apikey").value = settingsForRenderer.apiKey;
+  }
+  // Restore whichever auth method was saved last.
+  // Use rAF so the pill buttons have a valid offsetWidth even when the
+  // settings view is initially hidden (the nav click will also reposition).
+  const restoredMethod = settingsForRenderer.authMethod === "oidc" ? "oidc" : "apikey";
+  requestAnimationFrame(() => setAuthMethod(restoredMethod));
+
+  // Check OIDC availability and update pill state.
+  // Do this after rAF so setAuthMethod has already run.
+  if (settingsForRenderer.serverUrl) {
+    window.api
+      .checkOidcAvailable({ serverUrl: settingsForRenderer.serverUrl })
+      .then((r) => setOidcPillAvailable(r.available));
   }
 }
 
