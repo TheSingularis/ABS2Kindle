@@ -3,9 +3,15 @@
     "reloadButton": null,
     "commands": [
       {
-        "name": "$(triangle-right) Run Electron",
-        "color": "green",
+        "name": "$(play) Run Electron",
+        "color": "lightgreen",
         "command": "pkill -f '/run/current-system/sw/bin/electron' ; npm start",
+        "singleInstance": true
+      },
+      {
+        "name": "$(play) Run Electron (Windows)",
+        "color": "lightblue",
+        "command": "npm run start:windows",
         "singleInstance": true
       }
     ]
