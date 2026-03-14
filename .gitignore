@@ -60,9 +60,12 @@ Thumbs.db
 ehthumbs.db
 
 # Editor directories and files
-.vscode/
+.vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
+!.vscode/notes/
+.vscode/notes/*
+!.vscode/notes/*.md
 .idea/
 *.sublime-workspace
 *.swp
