@@ -4,6 +4,7 @@ Send ebooks from your [Audiobookshelf](https://www.audiobookshelf.org/) library 
 
 ## Features
 
+- **Home page** — personalized shelves mirroring the ABS Home view: Continue Series, Recently Added, Recent Series, Discover, Read Again, and Newest Authors (requires an authenticated session; shelves populate as you use ABS)
 - Browse your ABS library and select books to send
 - Auto-detects connected Kindle devices (KDE, GNOME, and other Linux desktops)
 - Converts EPUB → AZW3 via Calibre ebook-convert before transfer

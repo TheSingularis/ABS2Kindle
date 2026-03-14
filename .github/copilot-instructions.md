@@ -69,20 +69,20 @@ onTransferProgress(callback); // registers listener for "transfer-progress" even
 
 ## IPC Handlers (main.js)
 
-| Channel             | Type         | Notes                                                                         |
-| ------------------- | ------------ | ----------------------------------------------------------------------------- |
-| `ping`              | handle       | returns `"pong"`                                                              |
-| `get-settings`      | handle       | returns in-memory `settingsStore`                                             |
-| `save-settings`     | handle       | merges + writes `settings.json`                                               |
-| `test-connection`   | handle       | GET `/api/libraries` with Bearer token                                        |
-| `get-libraries`     | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                            |
-| `get-books`         | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                      |
-| `detect-kindles`    | handle       | 3-tier detection: GVFS → kmtpd → jmtpfs                                       |
-| `send-to-kindle`    | handle       | downloads EPUB to tmp, calls `copyToKindle`, emits `transfer-progress` events |
-| `transfer-progress` | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                  |
-| `window-minimize`   | on           | minimize focused window                                                       |
-| `window-maximize`   | on           | toggle maximize on focused window                                             |
-| `window-close`      | on           | close focused window                                                          |
+| Channel             | Type         | Notes                                                                                                                                                       |
+| ------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ping`              | handle       | returns `"pong"`                                                                                                                                            |
+| `get-settings`      | handle       | returns in-memory `settingsStore`                                                                                                                           |
+| `save-settings`     | handle       | merges + writes `settings.json`                                                                                                                             |
+| `test-connection`   | handle       | GET `/api/libraries` with Bearer token                                                                                                                      |
+| `get-libraries`     | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                                                                                                          |
+| `get-books`         | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                                                                                                    |
+| `detect-kindles`    | handle       | 3-tier detection: GVFS → kmtpd → jmtpfs                                                                                                                     |
+| `send-to-kindle`    | handle       | downloads EPUB to tmp, converts, copies to Kindle; up to 3 books processed concurrently (steps 1–4), copy step serialised; emits `transfer-progress` events |
+| `transfer-progress` | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                                                                                                |
+| `window-minimize`   | on           | minimize focused window                                                                                                                                     |
+| `window-maximize`   | on           | toggle maximize on focused window                                                                                                                           |
+| `window-close`      | on           | close focused window                                                                                                                                        |
 
 ### Transfer progress `status` values
 
@@ -124,19 +124,24 @@ Detection runs in priority order; first non-empty result wins:
 
 ## Transfer Pipeline — `send-to-kindle` handler
 
-Each item goes through 5 steps in sequence. Progress events are emitted between steps.
+Up to 3 books are processed concurrently through steps 1–4. Step 5 (copy) is always serialised — only one Kindle write runs at a time. Progress events are emitted per-book as each step completes.
 
 ```
+Per book (up to 3 concurrent):
 1. absRequest items/:id          → fetch metadata (title, ASIN)
-2. GET /api/items/:id/ebook      → download EPUB to /tmp
+2. GET /api/items/:id/ebook      → download EPUB to /tmp/abs2k_<itemId>.epub
 3. convertEpubToAzw3()           → ebook-convert epub → azw3 (--output-profile=kindle_pw3)
 4. injectAsinIntoAzw3()          → overwrite EXTH type-113 in-place with real ASIN (null-padded)
+
+Serial copy gate (one at a time):
 5. copyToKindle()                → transfer .azw3 to Kindle documents folder
 ```
 
+- Tmp files are named `abs2k_<itemId>.epub/.azw3` to avoid collisions between concurrent tasks
 - If the item has no ASIN in ABS metadata, conversion still proceeds but ASIN injection is skipped (warning logged)
 - Calibre (`ebook-convert`) must be installed; throws if not found
 - The AZW3 is what lands on the Kindle — never a raw EPUB
+- If a dolphin-blocking error occurs during copy, `abortCopies` is set and all pending copy-queue entries are skipped
 - See `.vscode/notes/azw3-asin-injection.md` for the in-place patch rationale
 
 ### Transfer progress `status` values

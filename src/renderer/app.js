@@ -23,6 +23,7 @@ function iconHtml(id) {
 
 // ── Navigation ────────────────────────────────────────────────
 const views = {
+  home: document.getElementById("view-home"),
   library: document.getElementById("view-library"),
   settings: document.getElementById("view-settings"),
   kindle: document.getElementById("view-kindle"),
@@ -33,27 +34,36 @@ function showView(name) {
     el.classList.toggle("hidden", k !== name);
   });
   document
+    .getElementById("nav-home")
+    .classList.toggle("active", name === "home");
+  document
     .getElementById("nav-library")
     .classList.toggle("active", name === "library");
   document
     .getElementById("nav-settings")
     .classList.toggle("active", name === "settings");
+
+  // Switching views always discards any library selection.
+  selectedBooks.clear();
+  updateBottomBar();
 }
 
 document.getElementById("nav-library").addEventListener("click", () => {
   showView("library");
   if (allBooks.length === 0) loadLibrary();
 });
-document
-  .getElementById("nav-settings")
-  .addEventListener("click", () => {
-    showView("settings");
-    // Re-position the slider now that the panel is visible and has layout.
-    requestAnimationFrame(() => {
-      const active = document.querySelector(".auth-pill-btn.active");
-      if (active) positionPillSlider(active);
-    });
+document.getElementById("nav-home").addEventListener("click", () => {
+  showView("home");
+  loadHome();
+});
+document.getElementById("nav-settings").addEventListener("click", () => {
+  showView("settings");
+  // Re-position the slider now that the panel is visible and has layout.
+  requestAnimationFrame(() => {
+    const active = document.querySelector(".auth-pill-btn.active");
+    if (active) positionPillSlider(active);
   });
+});
 
 // ── Kindle Detection ──────────────────────────────────────────
 let detectedKindles = [];
@@ -80,7 +90,7 @@ function renderKindleSidebar() {
     list.innerHTML = '<div class="no-device">No Kindle detected</div>';
     selectedKindle = null;
     kindleBookStems.clear();
-    renderGrid(allBooks);
+    document.getElementById("search").dispatchEvent(new Event("input"));
     updateBottomBar();
     return;
   }
@@ -118,7 +128,13 @@ function renderKindleSidebar() {
     list.appendChild(el);
 
     // Auto-select first device found
-    if (i === 0) selectedKindle = device;
+    if (i === 0) {
+      selectedKindle = device;
+      // Load Kindle books in the background immediately so on-Kindle badges
+      // are accurate as soon as the device is detected, without waiting for
+      // the user to open the Kindle view.
+      loadKindleBooks(device).catch(() => {});
+    }
   });
 
   updateBottomBar();
@@ -182,7 +198,8 @@ async function loadKindleBooks(device) {
     }
     kindleBookStems.add(stemFromFilename(filename));
   }
-  renderGrid(allBooks);
+  // Re-render badges while preserving any active search filter.
+  document.getElementById("search").dispatchEvent(new Event("input"));
 
   listEl.innerHTML = "";
   result.files.forEach(({ filename, asin }) => {
@@ -297,6 +314,238 @@ document.getElementById("search").addEventListener("input", (e) => {
   renderGrid(filtered);
 });
 
+// ── Home (Personalized) View ──────────────────────────────────
+// Mirrors the ABS Home page: shelves returned by /api/libraries/:id/personalized
+// Each shelf has an id, label, type ('book' | 'series' | 'authors'), and entities.
+
+// Shelf IDs that are relevant for ebook readers (skip audio-only shelves).
+// We map the ABS shelf IDs to friendly display names where the label differs.
+const HOME_SHELF_LABELS = {
+  "continue-series": "Continue Series",
+  "recently-added": "Recently Added",
+  recommended: "Discover",
+  "listen-again": "Read Again",
+  // Fall through to shelf.label for anything else
+};
+
+// Shelves we never want to show regardless of what the server returns.
+const HOME_SHELF_HIDDEN = new Set(["recent-series", "newest-authors"]);
+
+let homeLoaded = false;
+
+async function loadHome() {
+  const container = document.getElementById("home-shelves");
+
+  // Only re-fetch if we don't have a library yet.
+  if (!currentLibraryId) {
+    // Make sure the library list has been fetched so we have an ID.
+    const libraries = await window.api.getLibraries();
+    if (libraries?.error) {
+      container.innerHTML = `<div class="empty-state">Error: ${libraries.error}</div>`;
+      return;
+    }
+    const bookLibs = (libraries || []).filter((l) => l.mediaType === "book");
+    if (bookLibs.length === 0) {
+      container.innerHTML =
+        '<div class="empty-state">No book libraries found.</div>';
+      return;
+    }
+    currentLibraryId = bookLibs[0].id;
+  }
+
+  container.innerHTML = '<div class="empty-state">Loading…</div>';
+  homeLoaded = false;
+
+  const result = await window.api.getPersonalized({
+    libraryId: currentLibraryId,
+  });
+
+  if (!result.ok) {
+    container.innerHTML = `<div class="empty-state">Error: ${result.error}</div>`;
+    return;
+  }
+
+  renderHomeShelves(result.shelves, container);
+  homeLoaded = true;
+}
+
+function renderHomeShelves(shelves, container) {
+  container.innerHTML = "";
+
+  // Filter to shelves we care about; keep original order from the server.
+  const visibleShelves = shelves.filter((s) => {
+    if (s.entities.length === 0) return false;
+    // Skip podcast/episode-only shelves — we only handle ebooks here.
+    if (s.type === "episode") return false;
+    // Skip explicitly hidden shelves.
+    if (HOME_SHELF_HIDDEN.has(s.id)) return false;
+    return true;
+  });
+
+  if (visibleShelves.length === 0) {
+    container.innerHTML =
+      '<div class="empty-state">Nothing to show yet. Start reading on ABS to populate your Home page.</div>';
+    return;
+  }
+
+  for (const shelf of visibleShelves) {
+    const label = HOME_SHELF_LABELS[shelf.id] ?? shelf.label;
+    const section = document.createElement("section");
+    section.className = "home-shelf";
+    section.dataset.shelfId = shelf.id;
+
+    const heading = document.createElement("h2");
+    heading.className = "home-shelf-heading";
+    heading.textContent = label;
+    section.appendChild(heading);
+
+    const row = document.createElement("div");
+    row.className = "home-shelf-row";
+
+    if (shelf.type === "series") {
+      shelf.entities.forEach((series) => {
+        row.appendChild(buildSeriesCard(series));
+      });
+    } else {
+      // 'book' type — render normal book cards (selectable for Send to Kindle)
+      shelf.entities.forEach((item) => {
+        row.appendChild(buildHomeBookCard(item));
+      });
+    }
+
+    section.appendChild(row);
+    container.appendChild(section);
+  }
+}
+
+// Book card for the home shelves — same selectable behaviour as the library grid.
+function buildHomeBookCard(item) {
+  const meta = item.media?.metadata ?? {};
+  const title = meta.title ?? "Untitled";
+  const author = meta.authorName ?? "";
+  const hasCover = !!item.media?.coverPath;
+  const asin = meta.asin ?? null;
+
+  const card = document.createElement("div");
+  card.className = "home-book-card";
+  card.dataset.id = item.id;
+
+  // On-Kindle badge check
+  const asinKey = asin ? `asin:${asin}` : null;
+  const isOnKindle =
+    (asinKey !== null && kindleBookStems.has(asinKey)) ||
+    kindleBookStems.has(sanitizeTitle(title));
+
+  const coverEl = document.createElement("div");
+  coverEl.className = "home-book-cover";
+  if (hasCover) {
+    const img = document.createElement("img");
+    img.src = `${settingsForRenderer.serverUrl}/api/items/${item.id}/cover?token=${settingsForRenderer.apiKey}`;
+    img.alt = "";
+    img.addEventListener("error", () => {
+      img.remove();
+      coverEl.classList.add("home-book-cover--placeholder");
+      coverEl.appendChild(icon("book"));
+    });
+    coverEl.appendChild(img);
+  } else {
+    coverEl.classList.add("home-book-cover--placeholder");
+    coverEl.appendChild(icon("book"));
+  }
+
+  // ASIN status badge (top-right) — same logic as the library grid
+  const asinState = asin ? "ok" : "missing";
+  const asinLabel = asin ? "ASIN present" : "No ASIN in metadata";
+  const asinBadge = document.createElement("div");
+  asinBadge.className = `asin-badge asin-${asinState}`;
+  asinBadge.setAttribute("aria-label", asinLabel);
+  asinBadge.innerHTML =
+    `<svg viewBox="0 0 16 16"><use href="#icon-asin-${asinState}"></use></svg>` +
+    `<span class="asin-badge-label">${asinLabel}</span>`;
+  coverEl.appendChild(asinBadge);
+
+  if (isOnKindle) {
+    const badge = document.createElement("div");
+    badge.className = "on-kindle-badge";
+    badge.setAttribute("aria-label", "Already on Kindle");
+    badge.innerHTML =
+      `<svg viewBox="0 0 16 16"><use href="#icon-smartphone"></use></svg>` +
+      `<span class="on-kindle-badge-label">On Kindle</span>`;
+    coverEl.appendChild(badge);
+  }
+
+  const titleEl = document.createElement("div");
+  titleEl.className = "home-book-title";
+  titleEl.title = title;
+  titleEl.textContent = title;
+
+  const authorEl = document.createElement("div");
+  authorEl.className = "home-book-author";
+  authorEl.textContent = author;
+
+  card.appendChild(coverEl);
+  card.appendChild(titleEl);
+  if (author) card.appendChild(authorEl);
+
+  card.addEventListener("click", () => {
+    const isSelected = card.classList.toggle("selected");
+    if (isSelected) {
+      selectedBooks.add(item.id);
+    } else {
+      selectedBooks.delete(item.id);
+    }
+    updateBottomBar();
+  });
+
+  return card;
+}
+
+// Series card — shows a mosaic of up to 4 book covers, series name, book count.
+function buildSeriesCard(series) {
+  const card = document.createElement("div");
+  card.className = "home-series-card";
+
+  const mosaic = document.createElement("div");
+  mosaic.className = "home-series-mosaic";
+
+  const books = series.books ?? [];
+  const previewBooks = books.slice(0, 4);
+
+  if (previewBooks.length === 0) {
+    mosaic.classList.add("home-series-mosaic--empty");
+    mosaic.appendChild(icon("book"));
+  } else {
+    previewBooks.forEach((b) => {
+      const img = document.createElement("img");
+      img.src = `${settingsForRenderer.serverUrl}/api/items/${b.id}/cover?token=${settingsForRenderer.apiKey}`;
+      img.alt = "";
+      img.addEventListener("error", () => {
+        img.remove();
+        const ph = document.createElement("div");
+        ph.className = "home-series-mosaic-ph";
+        ph.appendChild(icon("book"));
+        mosaic.appendChild(ph);
+      });
+      mosaic.appendChild(img);
+    });
+  }
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "home-series-name";
+  nameEl.title = series.name;
+  nameEl.textContent = series.name;
+
+  const countEl = document.createElement("div");
+  countEl.className = "home-series-count";
+  const n = books.length;
+  countEl.textContent = `${n} book${n !== 1 ? "s" : ""}`;
+
+  card.appendChild(mosaic);
+  card.appendChild(nameEl);
+  card.appendChild(countEl);
+  return card;
+}
+
 // ── Library ───────────────────────────────────────────────────
 let allBooks = [];
 let selectedBooks = new Set();
@@ -304,7 +553,13 @@ let currentLibraryId = null;
 
 async function loadLibrary() {
   const grid = document.getElementById("book-grid");
-  grid.innerHTML = '<div class="empty-state">Loading libraries…</div>';
+  const isFirstLoad = allBooks.length === 0;
+
+  // On first load show a placeholder; on subsequent refreshes keep the
+  // existing cards visible so the search filter isn't blown away.
+  if (isFirstLoad) {
+    grid.innerHTML = '<div class="empty-state">Loading libraries…</div>';
+  }
 
   const libraries = await window.api.getLibraries();
 
@@ -323,7 +578,10 @@ async function loadLibrary() {
 
   // Use first book library for now
   currentLibraryId = bookLibs[0].id;
-  grid.innerHTML = '<div class="empty-state">Loading books…</div>';
+
+  if (isFirstLoad) {
+    grid.innerHTML = '<div class="empty-state">Loading books…</div>';
+  }
 
   const result = await window.api.getBooks({ libraryId: currentLibraryId });
 
@@ -333,11 +591,15 @@ async function loadLibrary() {
   }
 
   allBooks = result.results ?? [];
-  renderGrid(allBooks);
+  document.getElementById("search").dispatchEvent(new Event("input"));
 }
 
 function renderGrid(books) {
   const grid = document.getElementById("book-grid");
+
+  // Changing the grid always invalidates the current selection.
+  selectedBooks.clear();
+  updateBottomBar();
 
   if (books.length === 0) {
     grid.innerHTML = '<div class="empty-state">No books found.</div>';
@@ -462,6 +724,159 @@ function updateBottomBar() {
   btn.disabled = count === 0 || !selectedKindle;
 }
 
+// ── Transfer Progress Overlay ─────────────────────────────────
+// Maps itemId → { rowEl, stepEl, iconEl } for live updates.
+const txferRowMap = new Map();
+
+// Step labels shown in each book row as the transfer advances.
+const TXFER_STEP_LABELS = {
+  downloading: "Downloading…",
+  converting: "Converting to AZW3…",
+  copying: "Copying to Kindle…",
+  done: "Done",
+  error: "Error",
+  "dolphin-blocking": "Device busy",
+};
+
+// Icon id for each step state.
+const TXFER_STEP_ICON = {
+  downloading: "download",
+  converting: "refresh", // spinner
+  copying: "copy",
+  done: "check",
+  error: "x",
+  "dolphin-blocking": "alert",
+};
+
+function showTransferOverlay(itemIds) {
+  const overlay = document.getElementById("transfer-overlay");
+  const listEl = document.getElementById("transfer-book-list");
+  const fill = document.getElementById("transfer-progress-fill");
+  const countLabel = document.getElementById("transfer-count-label");
+  const titleEl = document.getElementById("transfer-title");
+  const footer = document.getElementById("transfer-footer");
+
+  txferRowMap.clear();
+  listEl.innerHTML = "";
+  fill.style.width = "0%";
+  titleEl.textContent = "Sending to Kindle…";
+  countLabel.textContent = `0 / ${itemIds.length}`;
+  footer.classList.add("hidden");
+  overlay.classList.remove("hidden");
+
+  for (const id of itemIds) {
+    const book = allBooks.find((b) => b.id === id);
+    const title = book?.media?.metadata?.title ?? id;
+
+    const row = document.createElement("div");
+    row.className = "txfer-row";
+
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "txfer-icon";
+    iconWrap.appendChild(icon("refresh"));
+
+    const textWrap = document.createElement("div");
+    textWrap.className = "txfer-text";
+
+    const titleEl2 = document.createElement("div");
+    titleEl2.className = "txfer-title";
+    titleEl2.title = title;
+    titleEl2.textContent = title;
+
+    const stepEl = document.createElement("div");
+    stepEl.className = "txfer-step";
+    stepEl.textContent = "Waiting…";
+
+    textWrap.appendChild(titleEl2);
+    textWrap.appendChild(stepEl);
+    row.appendChild(iconWrap);
+    row.appendChild(textWrap);
+    listEl.appendChild(row);
+
+    txferRowMap.set(id, { row, iconWrap, stepEl });
+  }
+}
+
+function updateTransferRow(itemId, status, title, error, current, total) {
+  const entry = txferRowMap.get(itemId);
+  const fill = document.getElementById("transfer-progress-fill");
+  const countLabel = document.getElementById("transfer-count-label");
+
+  if (entry) {
+    const { row, iconWrap, stepEl } = entry;
+
+    // Update step label
+    stepEl.textContent =
+      status === "error" && error
+        ? error
+        : (TXFER_STEP_LABELS[status] ?? status);
+
+    // Swap icon
+    const iconId = TXFER_STEP_ICON[status] ?? "refresh";
+    iconWrap.innerHTML = "";
+    const svgEl = icon(iconId);
+    if (status === "converting") {
+      svgEl.classList.add("txfer-icon-spin");
+    }
+    iconWrap.appendChild(svgEl);
+
+    // Row colour state
+    row.classList.remove("txfer-active", "txfer-done", "txfer-error");
+    if (status === "done") {
+      row.classList.add("txfer-done");
+    } else if (status === "error" || status === "dolphin-blocking") {
+      row.classList.add("txfer-error");
+    } else {
+      row.classList.add("txfer-active");
+    }
+
+    // Use the title from the event if we have it (more reliable than the
+    // pre-populated placeholder which might be the raw ABS item id)
+    if (title) {
+      const titleEl2 = row.querySelector(".txfer-title");
+      if (titleEl2) titleEl2.textContent = title;
+    }
+  }
+
+  // Update overall progress bar — count how many rows are terminal
+  const doneCount = Array.from(txferRowMap.values()).filter(
+    (e) =>
+      e.row.classList.contains("txfer-done") ||
+      e.row.classList.contains("txfer-error"),
+  ).length;
+
+  if (total > 0) {
+    fill.style.width = `${Math.round((doneCount / total) * 100)}%`;
+    countLabel.textContent = `${doneCount} / ${total}`;
+  }
+}
+
+function finalizeTransferOverlay(succeeded, failed) {
+  const titleEl = document.getElementById("transfer-title");
+  const footer = document.getElementById("transfer-footer");
+  const fill = document.getElementById("transfer-progress-fill");
+  const total = txferRowMap.size;
+
+  fill.style.width = "100%";
+
+  const dolphinBlocking = failed.some((r) => r.error === "dolphin-blocking");
+  if (dolphinBlocking) {
+    titleEl.textContent = "Device busy — close Dolphin and retry";
+  } else if (failed.length === 0) {
+    titleEl.textContent = `${succeeded.length} book${succeeded.length > 1 ? "s" : ""} sent successfully`;
+  } else if (succeeded.length === 0) {
+    titleEl.textContent = `All ${failed.length} transfers failed`;
+  } else {
+    titleEl.textContent = `${succeeded.length} sent, ${failed.length} failed`;
+  }
+
+  footer.classList.remove("hidden");
+}
+
+document.getElementById("btn-transfer-close").addEventListener("click", () => {
+  document.getElementById("transfer-overlay").classList.add("hidden");
+});
+
 document.getElementById("btn-send").addEventListener("click", async () => {
   if (selectedBooks.size === 0 || !selectedKindle) return;
 
@@ -469,28 +884,27 @@ document.getElementById("btn-send").addEventListener("click", async () => {
   const label = document.getElementById("selection-label");
   btn.disabled = true;
 
+  const itemIds = Array.from(selectedBooks);
+  showTransferOverlay(itemIds);
+
   const removeListener = window.api.onTransferProgress(
-    ({ current, total, status, title, error }) => {
-      if (status === "downloading") {
-        label.textContent = `⬇ Downloading ${current} of ${total}…`;
-      } else if (status === "converting") {
-        label.textContent = `⚙ Converting to AZW3: ${title}`;
-      } else if (status === "copying") {
-        label.innerHTML = `${iconHtml("copy")} Copying to Kindle: ${title}`;
-      } else if (status === "done") {
-        label.innerHTML = `${iconHtml("check")} ${current} of ${total} done: ${title}`;
-      } else if (status === "dolphin-blocking") {
-        label.innerHTML = `${iconHtml("alert")} Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
+    ({ current, total, itemId, status, title, error }) => {
+      updateTransferRow(itemId, status, title, error, current, total);
+
+      // Keep the bottom bar label updated as a brief summary
+      if (status === "done") {
+        label.innerHTML = `${iconHtml("check")} ${current} of ${total} done`;
       } else if (status === "error") {
-        label.innerHTML = `${iconHtml("x")} Error on ${current} of ${total}: ${error}`;
+        label.innerHTML = `${iconHtml("x")} Error on ${current} of ${total}`;
+      } else if (status === "dolphin-blocking") {
+        label.innerHTML = `${iconHtml("alert")} Device busy`;
       }
     },
   );
 
   try {
-    const sentIds = new Set(selectedBooks); // capture before clear
     const results = await window.api.sendToKindle({
-      itemIds: Array.from(selectedBooks),
+      itemIds,
       kindleDocumentsPath: selectedKindle.documentsPath,
       device: selectedKindle,
     });
@@ -500,6 +914,8 @@ document.getElementById("btn-send").addEventListener("click", async () => {
     const succeeded = results.results.filter((r) => r.ok);
     const failed = results.results.filter((r) => !r.ok);
     const dolphinBlocking = failed.some((r) => r.error === "dolphin-blocking");
+
+    finalizeTransferOverlay(succeeded, failed);
 
     if (dolphinBlocking) {
       label.innerHTML = `${iconHtml("alert")} Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
@@ -511,8 +927,8 @@ document.getElementById("btn-send").addEventListener("click", async () => {
       label.innerHTML = `${iconHtml("check")} ${succeeded.length} sent  ${iconHtml("x")} ${failed.length} failed`;
     }
 
-    // Optimistically mark successfully-sent books as on-Kindle so badges
-    // update immediately; refreshKindles() will do a proper re-scan after.
+    // Optimistically mark successfully-sent books as on-Kindle and re-render
+    // badges immediately — no network refresh needed.
     const succeededIds = new Set(succeeded.map((r) => r.itemId));
     for (const book of allBooks) {
       if (!succeededIds.has(book.id)) continue;
@@ -521,22 +937,26 @@ document.getElementById("btn-send").addEventListener("click", async () => {
       if (asin) kindleBookStems.add(`asin:${asin}`);
       if (title) kindleBookStems.add(sanitizeTitle(title));
     }
+
+    if (succeededIds.size > 0) {
+      // Re-render in place so on-Kindle badges appear immediately,
+      // preserving whatever search filter is active.
+      document.getElementById("search").dispatchEvent(new Event("input"));
+    }
   } catch (e) {
     removeListener();
     label.innerHTML = `${iconHtml("x")} Transfer failed: ${e.message}`;
+    finalizeTransferOverlay([], [{ error: e.message }]);
   }
 
   // Clear selection regardless of outcome
   selectedBooks.clear();
   document
-    .querySelectorAll(".book-card.selected")
+    .querySelectorAll(".book-card.selected, .home-book-card.selected")
     .forEach((c) => c.classList.remove("selected"));
   btn.disabled = true;
 
-  // Re-render grid to show updated on-Kindle badges
-  renderGrid(allBooks);
-
-  // Refresh Kindle book count to reflect new files
+  // Refresh Kindle sidebar book count to reflect new files
   refreshKindles();
 });
 
@@ -579,7 +999,10 @@ function setOidcPillAvailable(available) {
     oidcResult.className = "err";
   } else {
     // Clear any stale "not configured" message; leave success messages intact.
-    if (oidcResult.className === "err" && oidcResult.textContent.includes("OIDC")) {
+    if (
+      oidcResult.className === "err" &&
+      oidcResult.textContent.includes("OIDC")
+    ) {
       oidcResult.textContent = "";
       oidcResult.className = "";
     }
@@ -601,7 +1024,9 @@ const urlSavedBadge = document.getElementById("url-saved-badge");
 function flashUrlSaved(ok) {
   urlSavedBadge.classList.remove("visible", "err");
   // Swap the icon to match the outcome.
-  urlSavedBadge.querySelector("use").setAttribute("href", ok ? "#icon-check" : "#icon-x");
+  urlSavedBadge
+    .querySelector("use")
+    .setAttribute("href", ok ? "#icon-check" : "#icon-x");
   // Force reflow so re-adding the class re-triggers the CSS transition.
   void urlSavedBadge.offsetWidth;
   urlSavedBadge.classList.toggle("err", !ok);
@@ -682,45 +1107,47 @@ document.getElementById("btn-test").addEventListener("click", async () => {
 });
 
 // ── OIDC panel ────────────────────────────────────────────────
-document.getElementById("btn-oidc-login").addEventListener("click", async () => {
-  const btn = document.getElementById("btn-oidc-login");
-  const el = document.getElementById("oidc-result");
-  const serverUrl = document
-    .getElementById("input-url")
-    .value.trim()
-    .replace(/\/$/, "");
+document
+  .getElementById("btn-oidc-login")
+  .addEventListener("click", async () => {
+    const btn = document.getElementById("btn-oidc-login");
+    const el = document.getElementById("oidc-result");
+    const serverUrl = document
+      .getElementById("input-url")
+      .value.trim()
+      .replace(/\/$/, "");
 
-  if (!serverUrl) {
-    el.innerHTML = `${iconHtml("x")} Enter the Server URL first.`;
-    el.className = "err";
-    return;
-  }
+    if (!serverUrl) {
+      el.innerHTML = `${iconHtml("x")} Enter the Server URL first.`;
+      el.className = "err";
+      return;
+    }
 
-  btn.disabled = true;
-  el.textContent = "Opening login window…";
-  el.className = "";
+    btn.disabled = true;
+    el.textContent = "Opening login window…";
+    el.className = "";
 
-  const result = await window.api.startOidcLogin({ serverUrl });
+    const result = await window.api.startOidcLogin({ serverUrl });
 
-  btn.disabled = false;
+    btn.disabled = false;
 
-  if (result.ok) {
-    // Persist the token as apiKey so all existing API calls continue to work.
-    await window.api.saveSettings({
-      serverUrl,
-      apiKey: result.token,
-      authMethod: "oidc",
-    });
-    settingsForRenderer = await window.api.getSettings();
-    el.innerHTML = `${iconHtml("check")} Signed in successfully.`;
-    el.className = "ok";
-    // Trigger library load now that we have a valid token.
-    loadLibrary();
-  } else {
-    el.innerHTML = `${iconHtml("x")} ${result.error}`;
-    el.className = "err";
-  }
-});
+    if (result.ok) {
+      // Persist the token as apiKey so all existing API calls continue to work.
+      await window.api.saveSettings({
+        serverUrl,
+        apiKey: result.token,
+        authMethod: "oidc",
+      });
+      settingsForRenderer = await window.api.getSettings();
+      el.innerHTML = `${iconHtml("check")} Signed in successfully.`;
+      el.className = "ok";
+      // Trigger library load now that we have a valid token.
+      loadLibrary();
+    } else {
+      el.innerHTML = `${iconHtml("x")} ${result.error}`;
+      el.className = "err";
+    }
+  });
 
 // ── Startup ───────────────────────────────────────────────────
 async function loadSettingsIntoForm() {
@@ -734,7 +1161,8 @@ async function loadSettingsIntoForm() {
   // Restore whichever auth method was saved last.
   // Use rAF so the pill buttons have a valid offsetWidth even when the
   // settings view is initially hidden (the nav click will also reposition).
-  const restoredMethod = settingsForRenderer.authMethod === "oidc" ? "oidc" : "apikey";
+  const restoredMethod =
+    settingsForRenderer.authMethod === "oidc" ? "oidc" : "apikey";
   requestAnimationFrame(() => setAuthMethod(restoredMethod));
 
   // Check OIDC availability and update pill state.

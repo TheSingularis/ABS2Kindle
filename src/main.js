@@ -229,10 +229,7 @@ function generateVerifier() {
 }
 
 function generateChallenge(verifier) {
-  return crypto
-    .createHash("sha256")
-    .update(verifier)
-    .digest("base64url"); // base64url without padding
+  return crypto.createHash("sha256").update(verifier).digest("base64url"); // base64url without padding
 }
 
 function generateState() {
@@ -315,7 +312,10 @@ ipcMain.handle("start-oidc-login", async (event, { serverUrl }) => {
         const code = parsed.searchParams.get("code");
 
         if (returnedState !== state) {
-          return finish({ ok: false, error: "OIDC state mismatch — possible CSRF" });
+          return finish({
+            ok: false,
+            error: "OIDC state mismatch — possible CSRF",
+          });
         }
         if (!code) {
           return finish({ ok: false, error: "No code received in callback" });
@@ -419,6 +419,27 @@ ipcMain.handle("get-books", async (_, { libraryId }) => {
   }
 });
 
+// ── IPC: Personalized Home Shelves ────────────────────────────
+// Returns the same shelves ABS shows on its Home page, scoped to the
+// authenticated user (continue-series, recently-added, recent-series,
+// recommended, listen-again, newest-authors, etc.)
+ipcMain.handle("get-personalized", async (_, { libraryId }) => {
+  const { serverUrl, apiKey } = settingsStore;
+  try {
+    const shelves = await absRequest(
+      serverUrl,
+      apiKey,
+      `libraries/${libraryId}/personalized?limit=20`,
+    );
+    if (!Array.isArray(shelves)) {
+      return { ok: false, error: "Unexpected response from server" };
+    }
+    return { ok: true, shelves };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── IPC: Kindle detection ─────────────────────────────────────
 ipcMain.handle("detect-kindles", () => {
   // 1. GVFS / USB mass storage (GNOME and non-KDE)
@@ -444,18 +465,35 @@ ipcMain.handle(
   "send-to-kindle",
   async (event, { itemIds, kindleDocumentsPath, device }) => {
     const { serverUrl, apiKey } = settingsStore;
+    const total = itemIds.length;
     const results = [];
 
-    for (let i = 0; i < itemIds.length; i++) {
-      const itemId = itemIds[i];
-      const tmpDir = require("os").tmpdir();
+    // Serialise all Kindle writes — MTP (kmtpd/kioclient5) only handles one
+    // operation at a time; even for GVFS devices this is the safest approach
+    // and copy is by far the fastest step so the serial bottleneck is minimal.
+    let copyQueue = Promise.resolve();
+    const serialCopy = (fn) => {
+      copyQueue = copyQueue.then(fn);
+      return copyQueue;
+    };
+
+    // Shared abort flag — set on dolphin-blocking so pending copies are skipped.
+    let abortCopies = false;
+
+    // Process up to CONCURRENCY books through steps 1-4 simultaneously,
+    // then funnel each through the serial copy gate for step 5.
+    const CONCURRENCY = 3;
+    const executing = new Set();
+
+    const processItem = async (itemId, index) => {
+      const tmpDir = os.tmpdir();
       let epubPath = null;
       let azw3Path = null;
 
       const progress = (status, extra = {}) =>
         event.sender.send("transfer-progress", {
-          current: i + 1,
-          total: itemIds.length,
+          current: index + 1,
+          total,
           itemId,
           status,
           ...extra,
@@ -471,7 +509,9 @@ ipcMain.handle(
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
 
         // ── Step 2: download EPUB to tmp ──────────────────────
-        epubPath = path.join(tmpDir, `${safeTitle}.epub`);
+        // Use itemId in filename to avoid collisions on concurrent downloads
+        // of books that happen to sanitize to the same title.
+        epubPath = path.join(tmpDir, `abs2k_${itemId}.epub`);
         await downloadFile(
           `${serverUrl}/api/items/${itemId}/ebook`,
           apiKey,
@@ -480,7 +520,7 @@ ipcMain.handle(
 
         // ── Step 3: convert EPUB → AZW3 ──────────────────────
         progress("converting", { title });
-        azw3Path = path.join(tmpDir, `${safeTitle}.azw3`);
+        azw3Path = path.join(tmpDir, `abs2k_${itemId}.azw3`);
         convertEpubToAzw3(epubPath, azw3Path);
         fs.unlinkSync(epubPath);
         epubPath = null;
@@ -494,12 +534,19 @@ ipcMain.handle(
           );
         }
 
-        // ── Step 5: copy AZW3 to Kindle ───────────────────────
-        progress("copying", { title });
-        const destPath = path.join(kindleDocumentsPath, `${safeTitle}.azw3`);
-        await copyToKindle(azw3Path, destPath, device);
-        fs.unlinkSync(azw3Path);
-        azw3Path = null;
+        // ── Step 5: copy AZW3 to Kindle (serialised) ─────────
+        // Enqueue into the serial copy gate so only one MTP write runs at a time.
+        await serialCopy(async () => {
+          if (abortCopies) {
+            // A previous copy was dolphin-blocked; skip remaining copies.
+            throw new Error("Transfer aborted due to device busy");
+          }
+          progress("copying", { title });
+          const destPath = path.join(kindleDocumentsPath, `${safeTitle}.azw3`);
+          await copyToKindle(azw3Path, destPath, device);
+          fs.unlinkSync(azw3Path);
+          azw3Path = null;
+        });
 
         progress("done", { title });
         results.push({ itemId, title, ok: true });
@@ -513,6 +560,8 @@ ipcMain.handle(
         } catch (_) {}
 
         const isDolphinBlocking = e.message === DOLPHIN_BLOCKING_ERROR;
+        if (isDolphinBlocking) abortCopies = true;
+
         progress(isDolphinBlocking ? "dolphin-blocking" : "error", {
           error: isDolphinBlocking
             ? "Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again."
@@ -524,10 +573,18 @@ ipcMain.handle(
           ok: false,
           error: isDolphinBlocking ? "dolphin-blocking" : e.message,
         });
-
-        if (isDolphinBlocking) break;
       }
+    };
+
+    // Concurrency pool — kick off up to CONCURRENCY tasks at once, starting
+    // a new one each time a running task finishes.
+    for (let i = 0; i < itemIds.length; i++) {
+      const p = processItem(itemIds[i], i).finally(() => executing.delete(p));
+      executing.add(p);
+      if (executing.size >= CONCURRENCY) await Promise.race(executing);
     }
+    // Wait for all in-flight tasks to settle before returning.
+    await Promise.allSettled(executing);
 
     return { results };
   },

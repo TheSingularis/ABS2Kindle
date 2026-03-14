@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("api", {
   // Libraries
   getLibraries: () => ipcRenderer.invoke("get-libraries"),
   getBooks: (opts) => ipcRenderer.invoke("get-books", opts),
+  getPersonalized: (opts) => ipcRenderer.invoke("get-personalized", opts),
 
   // Kindle
   detectKindles: () => ipcRenderer.invoke("detect-kindles"),
