@@ -2,6 +2,7 @@
   "name": "abs2kindle",
   "version": "1.0.0",
   "description": "Send ebooks from Audiobookshelf to your Kindle",
+  "author": "TheSingularis",
   "main": "src/main.js",
   "scripts": {
     "start": "/run/current-system/sw/bin/electron \"$PWD\"",
@@ -9,17 +10,25 @@
     "build:win": "electron-builder --win"
   },
   "devDependencies": {
+    "electron": "^41.0.2",
     "electron-builder": "^24.0.0"
   },
   "build": {
     "appId": "com.abs2kindle.app",
     "productName": "ABS2Kindle",
-    "files": ["src/**/*"],
+    "files": [
+      "src/**/*"
+    ],
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     }
   }
 }
