@@ -311,10 +311,11 @@ button svg.icon {
 }
 
 .book-cover-wrap {
+    position: relative;
     width: 100%;
     aspect-ratio: 2/3;
     border-radius: 4px;
-    overflow: hidden;
+    /* overflow removed from wrapper so the badge pill can expand outside */
 }
 
 .book-cover {
@@ -324,6 +325,7 @@ button svg.icon {
     background: var(--surface2);
     object-fit: cover;
     display: block;
+    overflow: hidden;
 }
 
 .book-cover-placeholder {
@@ -331,10 +333,126 @@ button svg.icon {
     aspect-ratio: 2/3;
     border-radius: 4px;
     background: var(--surface2);
+    overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text3);
+}
+
+/* ASIN status badge — top-right corner of cover */
+.asin-badge {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    /* pill shape — starts as a circle, expands to a pill on hover */
+    height: 18px;
+    max-width: 18px;
+    border-radius: 9px;
+    overflow: hidden;
+    /* transition width + gap smoothly */
+    transition:
+        max-width 0.22s ease,
+        gap 0.22s ease,
+        padding-right 0.22s ease;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    cursor: default;
+    padding-right: 0;
+}
+
+/* colour variants */
+.asin-badge.asin-ok      { background: #22c55e; }
+.asin-badge.asin-missing { background: #f59e0b; }
+.asin-badge.asin-error   { background: #ef4444; }
+
+.asin-badge svg {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
+.asin-badge-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease 0.05s;
+    line-height: 1;
+    /* takes no space until the pill expands */
+    max-width: 0;
+}
+
+/* On hover: widen pill and fade label in */
+.asin-badge:hover {
+    max-width: 160px;
+    gap: 2px;
+    padding-right: 6px;
+}
+
+.asin-badge:hover .asin-badge-label {
+    opacity: 1;
+    max-width: 140px;
+}
+
+/* On-Kindle badge — bottom-left of cover, expands rightward on hover */
+.on-kindle-badge {
+    position: absolute;
+    bottom: 5px;
+    left: 5px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 18px;
+    max-width: 18px;
+    border-radius: 9px;
+    overflow: hidden;
+    transition:
+        max-width 0.22s ease,
+        gap 0.22s ease,
+        padding-right 0.22s ease;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    cursor: default;
+    padding-right: 0;
+    background: #6366f1; /* indigo — distinct from ASIN badge colours */
+}
+
+.on-kindle-badge svg {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    display: block;
+    /* #icon-smartphone uses stroke="currentColor"; set color so it inherits white */
+    color: white;
+    padding: 2px;
+}
+
+.on-kindle-badge-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.15s ease 0.05s;
+    line-height: 1;
+    max-width: 0;
+}
+
+.on-kindle-badge:hover {
+    max-width: 100px;
+    gap: 2px;
+    padding-right: 6px;
+}
+
+.on-kindle-badge:hover .on-kindle-badge-label {
+    opacity: 1;
+    max-width: 80px;
 }
 
 .book-cover-placeholder svg.icon {

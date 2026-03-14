@@ -60,7 +60,11 @@ function injectAsinIntoAzw3(filePath, asin) {
 
   const sizeBefore = buf.length;
   asinBytes.copy(buf, type113DataOffset);
-  buf.fill(0, type113DataOffset + asinBytes.length, type113DataOffset + type113DataLen);
+  buf.fill(
+    0,
+    type113DataOffset + asinBytes.length,
+    type113DataOffset + type113DataLen,
+  );
   fs.writeFileSync(filePath, buf);
 
   // Sanity-check: file size must not change (would corrupt PalmDB offsets)
@@ -69,6 +73,56 @@ function injectAsinIntoAzw3(filePath, asin) {
     throw new Error(
       `AZW3 size changed after ASIN injection (${sizeBefore} → ${sizeAfter}) — aborting`,
     );
+}
+
+/**
+ * Parse the ASIN from EXTH type-113 in a Buffer containing (at least the
+ * first 64 KB of) an AZW3/MOBI file.
+ * Returns the ASIN string, or null if not present / unreadable.
+ * Never throws.
+ */
+function readAsinFromBuffer(buf) {
+  try {
+    const exthOffset = buf.indexOf(Buffer.from("EXTH"));
+    if (exthOffset < 0) return null;
+
+    const recordCount = buf.readUInt32BE(exthOffset + 8);
+    let pos = exthOffset + 12;
+
+    for (let i = 0; i < recordCount; i++) {
+      if (pos + 8 > buf.length) break;
+      const rtype = buf.readUInt32BE(pos);
+      const rlen = buf.readUInt32BE(pos + 4);
+      if (rtype === 113) {
+        const data = buf.slice(pos + 8, pos + rlen);
+        const asin = data.toString("utf8").replace(/\0+$/, "").trim();
+        return asin.length > 0 ? asin : null;
+      }
+      if (rlen < 8) break;
+      pos += rlen;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Read the ASIN from EXTH type-113 in an AZW3/MOBI file on disk.
+ * Returns the ASIN string (trimmed of null padding), or null if not found.
+ * Never throws — any read/parse error returns null.
+ */
+function readAsinFromAzw3(filePath) {
+  try {
+    // Read only the first 64 KB — the EXTH section is always near the start
+    const fd = fs.openSync(filePath, "r");
+    const headBuf = Buffer.alloc(65536);
+    const bytesRead = fs.readSync(fd, headBuf, 0, headBuf.length, 0);
+    fs.closeSync(fd);
+    return readAsinFromBuffer(headBuf.slice(0, bytesRead));
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
@@ -87,11 +141,21 @@ async function copyToKindle(srcPath, destPath, device) {
     await new Promise((resolve, reject) => {
       execFile(
         "kioclient5",
-        ["--noninteractive", "--overwrite", "copy", `file://${srcPath}`, kioDestUri],
+        [
+          "--noninteractive",
+          "--overwrite",
+          "copy",
+          `file://${srcPath}`,
+          kioDestUri,
+        ],
         { timeout: 60000 },
         (err, _stdout, stderr) => {
           if (err) {
-            reject(new Error(`kioclient5 copy failed: ${(stderr || err.message).trim()}`));
+            reject(
+              new Error(
+                `kioclient5 copy failed: ${(stderr || err.message).trim()}`,
+              ),
+            );
           } else {
             resolve();
           }
@@ -112,7 +176,10 @@ async function copyToKindle(srcPath, destPath, device) {
     fs.copyFileSync(srcPath, destPath);
     return;
   } catch (e1) {
-    console.warn("copyToKindle: fs.copyFileSync failed, trying gio:", e1.message);
+    console.warn(
+      "copyToKindle: fs.copyFileSync failed, trying gio:",
+      e1.message,
+    );
   }
 
   // ── Attempt 2: gio copy ──────────────────────────────────────
@@ -124,7 +191,9 @@ async function copyToKindle(srcPath, destPath, device) {
         { timeout: 30000 },
         (err, _stdout, stderr) => {
           if (err) {
-            reject(new Error(`gio copy failed: ${(stderr || err.message).trim()}`));
+            reject(
+              new Error(`gio copy failed: ${(stderr || err.message).trim()}`),
+            );
           } else {
             resolve();
           }
@@ -140,4 +209,11 @@ async function copyToKindle(srcPath, destPath, device) {
   throw new Error(DOLPHIN_BLOCKING_ERROR);
 }
 
-module.exports = { DOLPHIN_BLOCKING_ERROR, convertEpubToAzw3, injectAsinIntoAzw3, copyToKindle };
+module.exports = {
+  DOLPHIN_BLOCKING_ERROR,
+  convertEpubToAzw3,
+  injectAsinIntoAzw3,
+  readAsinFromBuffer,
+  readAsinFromAzw3,
+  copyToKindle,
+};

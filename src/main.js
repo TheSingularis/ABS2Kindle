@@ -16,6 +16,8 @@ const {
   DOLPHIN_BLOCKING_ERROR,
   convertEpubToAzw3,
   injectAsinIntoAzw3,
+  readAsinFromBuffer,
+  readAsinFromAzw3,
   copyToKindle,
 } = require("./lib/kindle-transfer");
 
@@ -292,26 +294,79 @@ ipcMain.handle(
 // ──── Kindle Book Management ──────────────────────────────────
 
 ipcMain.handle("list-kindle-books", async (_, { device }) => {
-  const { execSync } = require("child_process");
+  const { execSync, spawn } = require("child_process");
   const BOOK_EXTS = [".epub", ".mobi", ".azw3", ".azw", ".pdf"];
+
+  // Annotate a filename with its ASIN (read from the file if path is accessible).
+  const annotate = (filename, dirPath) => {
+    let asin = null;
+    if (dirPath && /\.(azw3|mobi|azw)$/i.test(filename)) {
+      asin = readAsinFromAzw3(path.join(dirPath, filename));
+    }
+    return { filename, asin };
+  };
+
+  // For kmtpd devices: spawn kioclient5 cat directly (no shell, so special
+  // characters in filenames are safe), collect at most 64 KB of stdout, then
+  // parse the ASIN from the EXTH header.
+  const annotateViaKio = (filename, kioDocumentsUri) => {
+    if (!/\.(azw3|mobi|azw)$/i.test(filename))
+      return Promise.resolve({ filename, asin: null });
+    const kioUri = `${kioDocumentsUri}/${filename}`;
+    return new Promise((resolve) => {
+      const chunks = [];
+      let total = 0;
+      const MAX = 65536;
+      const child = spawn("kioclient5", ["--noninteractive", "cat", kioUri], {
+        timeout: 15000,
+      });
+      child.stdout.on("data", (chunk) => {
+        if (total >= MAX) return;
+        const remaining = MAX - total;
+        chunks.push(chunk.slice(0, remaining));
+        total += Math.min(chunk.length, remaining);
+        if (total >= MAX) {
+          // We have enough — kill the child so it doesn't stream the whole file
+          child.kill();
+        }
+      });
+      const finish = () => {
+        const buf = Buffer.concat(chunks);
+        const asin = readAsinFromBuffer(buf);
+        console.log(`annotateViaKio: ${filename} → asin=${asin}`);
+        resolve({ filename, asin });
+      };
+      child.on("close", finish);
+      child.on("error", (e) => {
+        console.warn(`annotateViaKio: spawn error for ${filename}:`, e.message);
+        resolve({ filename, asin: null });
+      });
+    });
+  };
 
   try {
     if (device.via === "kmtpd") {
-      // Use kioclient5 to list the documents folder
       const lsOut = execSync(
         `kioclient5 --noninteractive ls "${device.kioDocumentsUri}"`,
         { encoding: "utf8", timeout: 8000 },
       );
-      const files = lsOut
+      const filenames = lsOut
         .split("\n")
         .map((l) => l.trim())
         .filter((l) => BOOK_EXTS.some((ext) => l.toLowerCase().endsWith(ext)));
+      // Run sequentially — kmtpd handles one MTP operation at a time; concurrent
+      // kioclient5 calls against the same device corrupt each other's responses.
+      const files = [];
+      for (const filename of filenames) {
+        files.push(await annotateViaKio(filename, device.kioDocumentsUri));
+      }
       return { ok: true, files };
     } else {
-      // Direct filesystem access (GVFS / USB)
+      // Direct filesystem access (GVFS / USB) — read ASIN from each AZW3/MOBI.
       const files = fs
         .readdirSync(device.documentsPath)
-        .filter((f) => BOOK_EXTS.some((ext) => f.toLowerCase().endsWith(ext)));
+        .filter((f) => BOOK_EXTS.some((ext) => f.toLowerCase().endsWith(ext)))
+        .map((filename) => annotate(filename, device.documentsPath));
       return { ok: true, files };
     }
   } catch (e) {

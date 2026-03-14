@@ -52,6 +52,13 @@ document
 let detectedKindles = [];
 let selectedKindle = null;
 
+// Sanitized stems of files currently on the selected Kindle.
+// Updated whenever Kindle books are loaded; used to badge library cards.
+let kindleBookStems = new Set();
+
+// Shared sanitizer — matches the filename sanitization used during send.
+const sanitizeTitle = (s) => s.replace(/[<>:"/\\|?*]/g, "_");
+
 async function refreshKindles() {
   const list = document.getElementById("device-list");
   list.innerHTML = '<div class="no-device">Scanning…</div>';
@@ -65,6 +72,8 @@ function renderKindleSidebar() {
   if (detectedKindles.length === 0) {
     list.innerHTML = '<div class="no-device">No Kindle detected</div>';
     selectedKindle = null;
+    kindleBookStems.clear();
+    renderGrid(allBooks);
     updateBottomBar();
     return;
   }
@@ -136,26 +145,44 @@ async function loadKindleBooks(device) {
   }
 
   if (result.files.length === 0) {
-    listEl.innerHTML = '<div class="empty-state">No books on this Kindle.</div>';
+    listEl.innerHTML =
+      '<div class="empty-state">No books on this Kindle.</div>';
     return;
   }
 
-  // Build a lookup: sanitized-title → ABS book item
-  // Same sanitization used when the file was sent: replace /[<>:"/\\|?*]/g with "_"
-  const sanitize = (s) => s.replace(/[<>:"/\\|?*]/g, "_");
+  // Build lookups for matching Kindle files back to ABS library items.
+  // Priority: ASIN (definitive) → sanitized title stem (fallback).
+  const bookByAsin = new Map();
   const bookByTitle = new Map();
   for (const book of allBooks) {
+    const asin = book.media?.metadata?.asin;
     const title = book.media?.metadata?.title;
-    if (title) bookByTitle.set(sanitize(title), book);
+    if (asin) bookByAsin.set(asin, book);
+    if (title) bookByTitle.set(sanitizeTitle(title), book);
   }
 
   // Strip extension from filename to get the safe title key
   const stemFromFilename = (fname) => fname.replace(/\.[^.]+$/, "");
 
+  // Populate the kindle stem set and re-render the library grid so "on Kindle"
+  // badges appear immediately without requiring a manual refresh.
+  // Track both ASIN and title-stem so renderGrid can match either way.
+  kindleBookStems.clear();
+  for (const { filename, asin } of result.files) {
+    if (asin) {
+      // Store the ASIN directly so renderGrid can look it up
+      kindleBookStems.add(`asin:${asin}`);
+    }
+    kindleBookStems.add(stemFromFilename(filename));
+  }
+  renderGrid(allBooks);
+
   listEl.innerHTML = "";
-  result.files.forEach((filename) => {
+  result.files.forEach(({ filename, asin }) => {
     const stem = stemFromFilename(filename);
-    const matchedBook = bookByTitle.get(stem) ?? null;
+    // ASIN match is definitive; fall back to sanitized title stem
+    const matchedBook =
+      (asin && bookByAsin.get(asin)) ?? bookByTitle.get(stem) ?? null;
     const hasCover = matchedBook && matchedBook.media?.coverPath;
     const displayTitle = matchedBook?.media?.metadata?.title ?? stem;
     const displayAuthor = matchedBook?.media?.metadata?.authorName ?? "";
@@ -211,9 +238,11 @@ async function loadKindleBooks(device) {
         setTimeout(() => row.remove(), 300);
         // Update book count in sidebar
         device.bookCount = Math.max(0, (device.bookCount ?? 1) - 1);
-        document.querySelectorAll(".device-entry.selected .device-sub").forEach((el) => {
-          el.textContent = `${device.bookCount} book${device.bookCount !== 1 ? "s" : ""} on device`;
-        });
+        document
+          .querySelectorAll(".device-entry.selected .device-sub")
+          .forEach((el) => {
+            el.textContent = `${device.bookCount} book${device.bookCount !== 1 ? "s" : ""} on device`;
+          });
       } else {
         removeBtn.disabled = false;
         removeBtn.innerHTML = "";
@@ -239,7 +268,6 @@ async function loadKindleBooks(device) {
 document.getElementById("btn-back-to-library").addEventListener("click", () => {
   showView("library");
 });
-
 
 document
   .getElementById("btn-minimize")
@@ -316,9 +344,32 @@ function renderGrid(books) {
     const author = meta.authorName ?? "Unknown";
     const hasCover = !!book.media?.coverPath;
 
+    // ── ASIN badge state ─────────────────────────────────────
+    // 'ok'      → ASIN present (green check)
+    // 'missing' → no ASIN (amber dash)
+    // 'error'   → reserved for future use, e.g. malformed ASIN (red ×)
+    const asinState = meta.asin ? "ok" : "missing";
+    const asinBadgeIcon = {
+      ok: "asin-ok",
+      missing: "asin-missing",
+      error: "asin-error",
+    }[asinState];
+    const asinLabel = {
+      ok: "ASIN present",
+      missing: "No ASIN in metadata",
+      error: "Metadata error",
+    }[asinState];
+
     const card = document.createElement("div");
     card.className = "book-card";
     card.dataset.id = book.id;
+
+    // ── On-Kindle indicator ──────────────────────────────────
+    // Match by ASIN first (definitive), fall back to sanitized title stem.
+    const asinKey = meta.asin ? `asin:${meta.asin}` : null;
+    const isOnKindle =
+      (asinKey !== null && kindleBookStems.has(asinKey)) ||
+      kindleBookStems.has(sanitizeTitle(title));
 
     // Cover element — use <img> with SVG icon fallback, or just the icon
     const coverEl = document.createElement("div");
@@ -337,6 +388,26 @@ function renderGrid(books) {
     } else {
       coverEl.classList.add("book-cover-placeholder");
       coverEl.appendChild(icon("book"));
+    }
+
+    // ASIN status badge (top-right of cover)
+    const badge = document.createElement("div");
+    badge.className = `asin-badge asin-${asinState}`;
+    badge.setAttribute("aria-label", asinLabel);
+    badge.innerHTML =
+      `<svg viewBox="0 0 16 16"><use href="#icon-${asinBadgeIcon}"></use></svg>` +
+      `<span class="asin-badge-label">${asinLabel}</span>`;
+    coverEl.appendChild(badge);
+
+    // On-Kindle badge (bottom-left of cover)
+    if (isOnKindle) {
+      const kindleBadge = document.createElement("div");
+      kindleBadge.className = "on-kindle-badge";
+      kindleBadge.setAttribute("aria-label", "Already on Kindle");
+      kindleBadge.innerHTML =
+        `<svg viewBox="0 0 16 16"><use href="#icon-smartphone"></use></svg>` +
+        `<span class="on-kindle-badge-label">On Kindle</span>`;
+      coverEl.appendChild(kindleBadge);
     }
 
     const titleEl = document.createElement("div");
@@ -410,6 +481,7 @@ document.getElementById("btn-send").addEventListener("click", async () => {
   );
 
   try {
+    const sentIds = new Set(selectedBooks); // capture before clear
     const results = await window.api.sendToKindle({
       itemIds: Array.from(selectedBooks),
       kindleDocumentsPath: selectedKindle.documentsPath,
@@ -431,6 +503,17 @@ document.getElementById("btn-send").addEventListener("click", async () => {
     } else {
       label.innerHTML = `${iconHtml("check")} ${succeeded.length} sent  ${iconHtml("x")} ${failed.length} failed`;
     }
+
+    // Optimistically mark successfully-sent books as on-Kindle so badges
+    // update immediately; refreshKindles() will do a proper re-scan after.
+    const succeededIds = new Set(succeeded.map((r) => r.itemId));
+    for (const book of allBooks) {
+      if (!succeededIds.has(book.id)) continue;
+      const title = book.media?.metadata?.title;
+      const asin = book.media?.metadata?.asin;
+      if (asin) kindleBookStems.add(`asin:${asin}`);
+      if (title) kindleBookStems.add(sanitizeTitle(title));
+    }
   } catch (e) {
     removeListener();
     label.innerHTML = `${iconHtml("x")} Transfer failed: ${e.message}`;
@@ -442,6 +525,9 @@ document.getElementById("btn-send").addEventListener("click", async () => {
     .querySelectorAll(".book-card.selected")
     .forEach((c) => c.classList.remove("selected"));
   btn.disabled = true;
+
+  // Re-render grid to show updated on-Kindle badges
+  renderGrid(allBooks);
 
   // Refresh Kindle book count to reflect new files
   refreshKindles();
