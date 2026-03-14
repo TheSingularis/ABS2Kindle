@@ -230,6 +230,8 @@ document.getElementById("btn-send").addEventListener("click", async () => {
     ({ current, total, status, title, error }) => {
       if (status === "downloading") {
         label.textContent = `⬇ Downloading ${current} of ${total}…`;
+      } else if (status === "converting") {
+        label.textContent = `⚙ Converting to AZW3: ${title}`;
       } else if (status === "copying") {
         label.textContent = `📋 Copying to Kindle: ${title}`;
       } else if (status === "done") {

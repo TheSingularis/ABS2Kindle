@@ -118,19 +118,33 @@ Detection runs in priority order; first non-empty result wins:
 { name, path, documentsPath, bookCount }   // built by buildDeviceEntry()
 ```
 
-## Copy Strategy — `copyToKindle(srcPath, destPath, device)`
+## Transfer Pipeline — `send-to-kindle` handler
+
+Each item goes through 5 steps in sequence. Progress events are emitted between steps.
 
 ```
-if device.via === "kmtpd"
-  → kioclient5 --noninteractive --overwrite copy file://<srcPath> <kioDocumentsUri>/<filename>
-else
-  → fs.copyFileSync(srcPath, destPath)          // GVFS mount / USB mass storage
-  → on ENOENT/EXDEV: gio copy <srcPath> <destPath>   // gio fallback
-  → on failure: throw DOLPHIN_BLOCKING_ERROR sentinel
+1. absRequest items/:id          → fetch metadata (title, ASIN)
+2. GET /api/items/:id/ebook      → download EPUB to /tmp
+3. convertEpubToAzw3()           → ebook-convert epub → azw3 (--output-profile=kindle_pw3)
+4. injectAsinIntoAzw3()          → overwrite EXTH type-113 in-place with real ASIN (null-padded)
+5. copyToKindle()                → transfer .azw3 to Kindle documents folder
 ```
 
-- **`DOLPHIN_BLOCKING_ERROR`** constant (`"DOLPHIN_BLOCKING"`) — caught in `send-to-kindle` handler, emits `{ status: "dolphin-blocking" }` progress event and breaks the batch early
-- `kioclient5` works alongside `kiod6`/`kmtpd` — no need to kill or disable the KDE I/O daemon
+- If the item has no ASIN in ABS metadata, conversion still proceeds but ASIN injection is skipped (warning logged)
+- Calibre (`ebook-convert`) must be installed; throws if not found
+- The AZW3 is what lands on the Kindle — never a raw EPUB
+- See `.vscode/notes/azw3-asin-injection.md` for the in-place patch rationale
+
+### Transfer progress `status` values
+
+| Status             | Meaning                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `downloading`      | Fetching metadata + EPUB from ABS server                   |
+| `converting`       | Running ebook-convert EPUB → AZW3                          |
+| `copying`          | Writing AZW3 to Kindle                                     |
+| `done`             | File confirmed transferred                                 |
+| `error`            | Generic failure                                            |
+| `dolphin-blocking` | Non-KDE: file manager holds MTP device; user must close it |
 
 ## Linux Protocol Handler
 
