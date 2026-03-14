@@ -30,8 +30,23 @@ jobs:
               with:
                   node-version: 22
 
+            - name: Set version from tag
+              shell: bash
+              run: |
+                  TAG="${{ github.ref_name }}"
+                  VERSION="${TAG#v}"
+                  npm version "$VERSION" --no-git-tag-version
+
+            - name: Cache electron
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cache/electron
+                      ~/AppData/Local/electron/Cache
+                  key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
             - name: Install dependencies
-              run: npm install
+              run: npm ci
 
             - name: Build
               run: npx electron-builder ${{ matrix.args }}
