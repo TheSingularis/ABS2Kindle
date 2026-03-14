@@ -9,6 +9,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "/run/current-system/sw/bin/electron \"$PWD\"",
+    "start:windows": "electron .",
     "build:linux": "electron-builder --linux",
     "build:win": "electron-builder --win"
   },
