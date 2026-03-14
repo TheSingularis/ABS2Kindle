@@ -5,10 +5,27 @@ async function initSettings() {
   settingsForRenderer = await window.api.getSettings();
 }
 
+// ── Icon helper ───────────────────────────────────────────────
+// Returns an SVG element referencing the sprite symbol by id.
+function icon(id) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("icon");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#icon-${id}`);
+  svg.appendChild(use);
+  return svg;
+}
+
+// Returns an SVG icon as an HTML string (for innerHTML templates).
+function iconHtml(id) {
+  return `<svg class="icon"><use href="#icon-${id}"></use></svg>`;
+}
+
 // ── Navigation ────────────────────────────────────────────────
 const views = {
   library: document.getElementById("view-library"),
   settings: document.getElementById("view-settings"),
+  kindle: document.getElementById("view-kindle"),
 };
 
 function showView(name) {
@@ -57,7 +74,7 @@ function renderKindleSidebar() {
   if (busyEntry) {
     list.innerHTML = `
       <div class="no-device device-busy">
-        ⚠️ <strong>${busyEntry.name}</strong> detected but busy<br>
+        ${iconHtml("alert")} <strong>${busyEntry.name}</strong> detected but busy<br>
         <span class="device-busy-hint">System MTP daemon is holding the USB interface.<br>Apply the udev rule in README.md, then replug.</span>
       </div>`;
     selectedKindle = null;
@@ -70,7 +87,7 @@ function renderKindleSidebar() {
     const el = document.createElement("div");
     el.className = "device-entry" + (i === 0 ? " selected" : "");
     el.innerHTML = `
-      <div class="device-name">📱 ${device.name}</div>
+      <div class="device-name">${iconHtml("smartphone")} ${device.name}</div>
       <div class="device-sub">${device.bookCount} book${device.bookCount !== 1 ? "s" : ""} on device</div>
     `;
     el.addEventListener("click", () => {
@@ -80,6 +97,7 @@ function renderKindleSidebar() {
       el.classList.add("selected");
       selectedKindle = device;
       updateBottomBar();
+      openKindleView(device);
     });
     list.appendChild(el);
 
@@ -97,7 +115,132 @@ document
 // Auto-detect on load
 refreshKindles();
 
-// ── Window controls ───────────────────────────────────────────
+// ── Kindle Device View ────────────────────────────────────────
+async function openKindleView(device) {
+  document.getElementById("kindle-view-title").textContent = device.name;
+  document.getElementById("kindle-view-subtitle").textContent =
+    device.storageName ? device.storageName : "";
+  showView("kindle");
+  await loadKindleBooks(device);
+}
+
+async function loadKindleBooks(device) {
+  const listEl = document.getElementById("kindle-book-list");
+  listEl.innerHTML = '<div class="empty-state">Loading books…</div>';
+
+  const result = await window.api.listKindleBooks({ device });
+
+  if (!result.ok) {
+    listEl.innerHTML = `<div class="empty-state">Error: ${result.error}</div>`;
+    return;
+  }
+
+  if (result.files.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">No books on this Kindle.</div>';
+    return;
+  }
+
+  // Build a lookup: sanitized-title → ABS book item
+  // Same sanitization used when the file was sent: replace /[<>:"/\\|?*]/g with "_"
+  const sanitize = (s) => s.replace(/[<>:"/\\|?*]/g, "_");
+  const bookByTitle = new Map();
+  for (const book of allBooks) {
+    const title = book.media?.metadata?.title;
+    if (title) bookByTitle.set(sanitize(title), book);
+  }
+
+  // Strip extension from filename to get the safe title key
+  const stemFromFilename = (fname) => fname.replace(/\.[^.]+$/, "");
+
+  listEl.innerHTML = "";
+  result.files.forEach((filename) => {
+    const stem = stemFromFilename(filename);
+    const matchedBook = bookByTitle.get(stem) ?? null;
+    const hasCover = matchedBook && matchedBook.media?.coverPath;
+    const displayTitle = matchedBook?.media?.metadata?.title ?? stem;
+    const displayAuthor = matchedBook?.media?.metadata?.authorName ?? "";
+
+    const row = document.createElement("div");
+    row.className = "kindle-book-row";
+    row.dataset.filename = filename;
+
+    // Cover thumbnail
+    const thumbEl = document.createElement("div");
+    thumbEl.className = "kindle-book-thumb";
+    if (hasCover) {
+      const img = document.createElement("img");
+      img.src = `${settingsForRenderer.serverUrl}/api/items/${matchedBook.id}/cover?token=${settingsForRenderer.apiKey}`;
+      img.alt = "";
+      img.onerror = () => {
+        img.remove();
+        thumbEl.appendChild(icon("book"));
+      };
+      thumbEl.appendChild(img);
+    } else {
+      thumbEl.appendChild(icon("book"));
+    }
+
+    // Text block
+    const textEl = document.createElement("div");
+    textEl.className = "kindle-book-text";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "kindle-book-name";
+    nameEl.textContent = displayTitle;
+    nameEl.title = filename;
+    textEl.appendChild(nameEl);
+
+    if (displayAuthor) {
+      const authorEl = document.createElement("span");
+      authorEl.className = "kindle-book-author";
+      authorEl.textContent = displayAuthor;
+      textEl.appendChild(authorEl);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "secondary kindle-remove-btn";
+    removeBtn.appendChild(icon("trash"));
+    removeBtn.addEventListener("click", async () => {
+      removeBtn.disabled = true;
+      removeBtn.innerHTML = "";
+      removeBtn.appendChild(icon("trash"));
+      const res = await window.api.deleteKindleBook({ device, filename });
+      if (res.ok) {
+        row.classList.add("kindle-row-removed");
+        // Fade out then remove
+        setTimeout(() => row.remove(), 300);
+        // Update book count in sidebar
+        device.bookCount = Math.max(0, (device.bookCount ?? 1) - 1);
+        document.querySelectorAll(".device-entry.selected .device-sub").forEach((el) => {
+          el.textContent = `${device.bookCount} book${device.bookCount !== 1 ? "s" : ""} on device`;
+        });
+      } else {
+        removeBtn.disabled = false;
+        removeBtn.innerHTML = "";
+        removeBtn.appendChild(icon("trash"));
+        // Show inline error
+        let errEl = row.querySelector(".kindle-remove-error");
+        if (!errEl) {
+          errEl = document.createElement("span");
+          errEl.className = "kindle-remove-error";
+          row.appendChild(errEl);
+        }
+        errEl.textContent = res.error;
+      }
+    });
+
+    row.appendChild(thumbEl);
+    row.appendChild(textEl);
+    row.appendChild(removeBtn);
+    listEl.appendChild(row);
+  });
+}
+
+document.getElementById("btn-back-to-library").addEventListener("click", () => {
+  showView("library");
+});
+
+
 document
   .getElementById("btn-minimize")
   .addEventListener("click", () => window.api.windowMinimize());
@@ -171,21 +314,43 @@ function renderGrid(books) {
     const meta = book.media?.metadata ?? {};
     const title = meta.title ?? "Untitled";
     const author = meta.authorName ?? "Unknown";
-    const coverId = book.media?.coverPath ? book.id : null;
+    const hasCover = !!book.media?.coverPath;
 
     const card = document.createElement("div");
     card.className = "book-card";
     card.dataset.id = book.id;
 
-    const coverHtml = coverId
-      ? `<img class="book-cover" src="${settingsForRenderer.serverUrl}/api/items/${book.id}/cover?token=${settingsForRenderer.apiKey}" onerror="this.replaceWith(makePlaceholder())" />`
-      : `<div class="book-cover-placeholder">📖</div>`;
+    // Cover element — use <img> with SVG icon fallback, or just the icon
+    const coverEl = document.createElement("div");
+    coverEl.className = "book-cover-wrap";
+    if (hasCover) {
+      const img = document.createElement("img");
+      img.className = "book-cover";
+      img.src = `${settingsForRenderer.serverUrl}/api/items/${book.id}/cover?token=${settingsForRenderer.apiKey}`;
+      img.alt = "";
+      img.addEventListener("error", () => {
+        img.remove();
+        coverEl.classList.add("book-cover-placeholder");
+        coverEl.appendChild(icon("book"));
+      });
+      coverEl.appendChild(img);
+    } else {
+      coverEl.classList.add("book-cover-placeholder");
+      coverEl.appendChild(icon("book"));
+    }
 
-    card.innerHTML = `
-      ${coverHtml}
-      <div class="book-title" title="${title}">${title}</div>
-      <div class="book-author">${author}</div>
-    `;
+    const titleEl = document.createElement("div");
+    titleEl.className = "book-title";
+    titleEl.title = title;
+    titleEl.textContent = title;
+
+    const authorEl = document.createElement("div");
+    authorEl.className = "book-author";
+    authorEl.textContent = author;
+
+    card.appendChild(coverEl);
+    card.appendChild(titleEl);
+    card.appendChild(authorEl);
 
     card.addEventListener("click", () => toggleBookSelection(book.id, card));
     grid.appendChild(card);
@@ -233,13 +398,13 @@ document.getElementById("btn-send").addEventListener("click", async () => {
       } else if (status === "converting") {
         label.textContent = `⚙ Converting to AZW3: ${title}`;
       } else if (status === "copying") {
-        label.textContent = `📋 Copying to Kindle: ${title}`;
+        label.innerHTML = `${iconHtml("copy")} Copying to Kindle: ${title}`;
       } else if (status === "done") {
-        label.textContent = `✓ ${current} of ${total} done: ${title}`;
+        label.innerHTML = `${iconHtml("check")} ${current} of ${total} done: ${title}`;
       } else if (status === "dolphin-blocking") {
-        label.textContent = `⚠️ Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
+        label.innerHTML = `${iconHtml("alert")} Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
       } else if (status === "error") {
-        label.textContent = `✗ Error on ${current} of ${total}: ${error}`;
+        label.innerHTML = `${iconHtml("x")} Error on ${current} of ${total}: ${error}`;
       }
     },
   );
@@ -258,17 +423,17 @@ document.getElementById("btn-send").addEventListener("click", async () => {
     const dolphinBlocking = failed.some((r) => r.error === "dolphin-blocking");
 
     if (dolphinBlocking) {
-      label.textContent = `⚠️ Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
+      label.innerHTML = `${iconHtml("alert")} Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again.`;
     } else if (failed.length === 0) {
-      label.textContent = `✓ ${succeeded.length} book${succeeded.length > 1 ? "s" : ""} sent to ${selectedKindle.name}`;
+      label.innerHTML = `${iconHtml("check")} ${succeeded.length} book${succeeded.length > 1 ? "s" : ""} sent to ${selectedKindle.name}`;
     } else if (succeeded.length === 0) {
-      label.textContent = `✗ All ${failed.length} transfers failed`;
+      label.innerHTML = `${iconHtml("x")} All ${failed.length} transfers failed`;
     } else {
-      label.textContent = `✓ ${succeeded.length} sent  ✗ ${failed.length} failed`;
+      label.innerHTML = `${iconHtml("check")} ${succeeded.length} sent  ${iconHtml("x")} ${failed.length} failed`;
     }
   } catch (e) {
     removeListener();
-    label.textContent = `✗ Transfer failed: ${e.message}`;
+    label.innerHTML = `${iconHtml("x")} Transfer failed: ${e.message}`;
   }
 
   // Clear selection regardless of outcome
@@ -305,10 +470,10 @@ document.getElementById("btn-test").addEventListener("click", async () => {
   const apiKey = document.getElementById("input-apikey").value.trim();
   const result = await window.api.testConnection({ serverUrl, apiKey });
   if (result.ok) {
-    el.textContent = `✓ Connected — ${result.count} librar${result.count === 1 ? "y" : "ies"} found`;
+    el.innerHTML = `${iconHtml("check")} Connected — ${result.count} librar${result.count === 1 ? "y" : "ies"} found`;
     el.className = "ok";
   } else {
-    el.textContent = `✗ ${result.error}`;
+    el.innerHTML = `${iconHtml("x")} ${result.error}`;
     el.className = "err";
   }
 });

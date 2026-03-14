@@ -131,6 +131,12 @@ body {
     gap: 16px;
 }
 
+#settings-section {
+    margin-top: auto;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+}
+
 .sidebar-section {
     padding: 0 8px;
     display: flex;
@@ -228,12 +234,39 @@ body {
 .device-entry .device-name {
     font-weight: 500;
     font-size: 12.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .device-entry .device-sub {
     font-size: 10px;
     color: var(--text3);
     margin-top: 2px;
+}
+
+/* Global icon sizing ─────────────────────────────────────── */
+svg.icon {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.125em;
+    flex-shrink: 0;
+    stroke: currentColor;
+    fill: none;
+}
+
+/* Slightly larger icons in sidebar nav items and buttons */
+.sidebar-item svg.icon,
+button svg.icon {
+    width: 14px;
+    height: 14px;
+}
+
+/* Status-bar icons in the bottom bar */
+#selection-label svg.icon,
+#test-result svg.icon {
+    width: 13px;
+    height: 13px;
 }
 
 /* Content area */
@@ -277,12 +310,20 @@ body {
     background: var(--surface);
 }
 
-.book-cover {
+.book-cover-wrap {
     width: 100%;
     aspect-ratio: 2/3;
     border-radius: 4px;
+    overflow: hidden;
+}
+
+.book-cover {
+    width: 100%;
+    height: 100%;
+    border-radius: 4px;
     background: var(--surface2);
     object-fit: cover;
+    display: block;
 }
 
 .book-cover-placeholder {
@@ -293,7 +334,12 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 28px;
+    color: var(--text3);
+}
+
+.book-cover-placeholder svg.icon {
+    width: 28px;
+    height: 28px;
 }
 
 .book-title {
@@ -392,6 +438,9 @@ button.secondary:hover {
 #test-result {
     font-size: 12px;
     color: var(--text2);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 
 #test-result.ok {
@@ -418,6 +467,124 @@ button.secondary:hover {
     flex: 1;
     color: var(--text2);
     font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Kindle device view */
+#view-kindle {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    gap: 0;
+}
+
+#kindle-view-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+    flex-shrink: 0;
+}
+
+#kindle-view-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.kindle-view-sub {
+    font-size: 11px;
+    color: var(--text3);
+}
+
+#kindle-book-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-top: 8px;
+}
+
+.kindle-book-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: background 0.15s, opacity 0.3s;
+}
+
+.kindle-book-row:hover {
+    background: var(--surface);
+}
+
+.kindle-book-thumb {
+    width: 36px;
+    height: 54px;
+    flex-shrink: 0;
+    border-radius: 3px;
+    background: var(--surface2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: var(--text3);
+}
+
+.kindle-book-thumb svg.icon {
+    width: 18px;
+    height: 18px;
+}
+
+.kindle-book-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 3px;
+}
+
+.kindle-book-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.kindle-book-name {
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kindle-book-author {
+    font-size: 11px;
+    color: var(--text3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kindle-remove-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+.kindle-remove-error {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #e05555;
+}
+
+.kindle-row-removed {
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* Hidden */

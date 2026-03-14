@@ -279,6 +279,61 @@ ipcMain.handle(
   },
 );
 
+// ──── Kindle Book Management ──────────────────────────────────
+
+ipcMain.handle("list-kindle-books", async (_, { device }) => {
+  const { execSync } = require("child_process");
+  const BOOK_EXTS = [".epub", ".mobi", ".azw3", ".azw", ".pdf"];
+
+  try {
+    if (device.via === "kmtpd") {
+      // Use kioclient5 to list the documents folder
+      const lsOut = execSync(
+        `kioclient5 --noninteractive ls "${device.kioDocumentsUri}"`,
+        { encoding: "utf8", timeout: 8000 },
+      );
+      const files = lsOut
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => BOOK_EXTS.some((ext) => l.toLowerCase().endsWith(ext)));
+      return { ok: true, files };
+    } else {
+      // Direct filesystem access (GVFS / USB)
+      const files = fs
+        .readdirSync(device.documentsPath)
+        .filter((f) => BOOK_EXTS.some((ext) => f.toLowerCase().endsWith(ext)));
+      return { ok: true, files };
+    }
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("delete-kindle-book", async (_, { device, filename }) => {
+  const { execSync } = require("child_process");
+
+  // Reject path traversal attempts
+  if (filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
+    return { ok: false, error: "Invalid filename" };
+  }
+
+  try {
+    if (device.via === "kmtpd") {
+      const kioUri = `${device.kioDocumentsUri}/${filename}`;
+      execSync(`kioclient5 --noninteractive del "${kioUri}"`, {
+        encoding: "utf8",
+        timeout: 10000,
+      });
+    } else {
+      const filePath = path.join(device.documentsPath, filename);
+      fs.unlinkSync(filePath);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── Window controls ───────────────────────────────────────────
 ipcMain.on("window-minimize", () => BrowserWindow.getFocusedWindow()?.minimize());
 ipcMain.on("window-maximize", () => {

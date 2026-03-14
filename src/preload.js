@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("api", {
   // Kindle
   detectKindles: () => ipcRenderer.invoke("detect-kindles"),
   sendToKindle: (opts) => ipcRenderer.invoke("send-to-kindle", opts),
+  listKindleBooks: (opts) => ipcRenderer.invoke("list-kindle-books", opts),
+  deleteKindleBook: (opts) => ipcRenderer.invoke("delete-kindle-book", opts),
   onTransferProgress: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("transfer-progress", handler);
