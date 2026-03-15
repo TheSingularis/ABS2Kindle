@@ -11,7 +11,7 @@
       {
         "name": "$(play) Run Electron (Windows)",
         "color": "lightblue",
-        "command": "npm run start:windows",
+        "command": "npm run start:windows; echo '--- Electron exited ---'",
         "singleInstance": true
       }
     ]

@@ -5,11 +5,12 @@ Send ebooks from your [Audiobookshelf](https://www.audiobookshelf.org/) library 
 ## Features
 
 - **Home page** — personalized shelves mirroring the ABS Home view: Continue Series, Recently Added, Recent Series, Discover, Read Again, and Newest Authors (requires an authenticated session; shelves populate as you use ABS)
-- Browse your ABS library and select books to send
-- Auto-detects connected Kindle devices (KDE, GNOME, and other Linux desktops)
+- Browse your ABS library and select books to send — search, sort (title / author / date added), and filter (all / has ASIN / missing ASIN)
+- Auto-detects connected Kindle devices on **Windows** (MTP via Shell.Application), **KDE**, **GNOME**, and other Linux desktops
 - Converts EPUB → AZW3 via Calibre ebook-convert before transfer
 - Injects the book's ASIN into the AZW3 so it matches your Kindle library
 - Transfers the AZW3 directly to the Kindle's documents folder
+- **Windows**: ASIN-to-cover matching is cached locally and resolved in the background — covers appear automatically after transfer
 
 ## Requirements
 
@@ -18,6 +19,8 @@ Send ebooks from your [Audiobookshelf](https://www.audiobookshelf.org/) library 
 - [Electron](https://www.electronjs.org/) — must be available on `PATH` or set in `package.json`
 - [Calibre](https://calibre-ebook.com/) (`ebook-convert`) — required for EPUB → AZW3 conversion
 
+**Linux** — install via your package manager:
+
 | Distro | Command |
 |---|---|
 | Arch / Manjaro | `sudo pacman -S calibre` |
@@ -25,9 +28,21 @@ Send ebooks from your [Audiobookshelf](https://www.audiobookshelf.org/) library 
 | Fedora | `sudo dnf install calibre` |
 | NixOS | Add `calibre` to `environment.systemPackages`, then `sudo nixos-rebuild switch` |
 
-### Kindle detection (Linux)
+**Windows** — download and install from [calibre-ebook.com/download](https://calibre-ebook.com/download). The app automatically finds Calibre in the standard install locations (`Program Files\Calibre2`, `Program Files (x86)\Calibre2`, or `%LOCALAPPDATA%\Calibre2`). If Calibre is not found, a prompt with a download link is shown in the transfer panel.
 
-Kindles connect via MTP. ABS2Kindle tries three detection methods in order, automatically:
+### Kindle detection
+
+Kindles connect via MTP. ABS2Kindle automatically selects the right method for your platform:
+
+#### Windows
+
+Detection uses the Windows Shell (`Shell.Application` COM). No drivers or extra software required — just plug in your Kindle, unlock it, and click **↻ Refresh**.
+
+Book transfers use the same Shell.Application COM interface. Because Windows MTP does not allow reading file contents directly, ASIN matching is handled via a local cache (`kindle-asin-cache.json`) that is populated on first transfer and updated in the background.
+
+#### Linux
+
+ABS2Kindle tries three detection methods in order, automatically:
 
 | Priority | Method | Works on |
 |---|---|---|
@@ -39,7 +54,7 @@ Kindles connect via MTP. ABS2Kindle tries three detection methods in order, auto
 
 **Non-KDE users** (GNOME, XFCE, etc.): the app reads the GVFS mount at `/run/user/<uid>/gvfs/`. If that isn't available, install `jmtpfs` as a fallback.
 
-#### Installing `jmtpfs` (non-KDE fallback only)
+##### Installing `jmtpfs` (non-KDE fallback only)
 
 | Distro | Command |
 |---|---|
@@ -58,7 +73,11 @@ Kindles connect via MTP. ABS2Kindle tries three detection methods in order, auto
    ```
 2. Run:
    ```sh
+   # Linux
    npm start
+
+   # Windows
+   npm run start:windows
    ```
 3. Open **Settings**, enter your Audiobookshelf server URL and choose an auth method:
 
@@ -91,7 +110,15 @@ Progress for each step is shown in the UI next to the book.
 
 ## Troubleshooting
 
-**Kindle shows as "busy" (non-KDE only)**
+**Calibre not found (Windows)**
+The transfer panel will show a "Calibre not found" message with a download link. Install Calibre from [calibre-ebook.com](https://calibre-ebook.com/download) and restart the app.
+
+**Kindle not detected (Windows)**
+- Make sure the Kindle is unlocked and showing "Connected" on its screen
+- Try unplugging and replugging, then click **↻ Refresh**
+- If another instance of the app is still running in the background, kill it (`taskkill /F /IM electron.exe`) before launching again
+
+**Kindle shows as "busy" (non-KDE Linux only)**
 Another process is holding the USB interface. This shouldn't happen on KDE since the app uses kmtpd directly. On other desktops, make sure no file manager has the device open.
 
 **Transfer fails with "Dolphin may be holding the device"**

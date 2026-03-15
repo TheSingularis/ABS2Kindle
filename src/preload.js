@@ -11,7 +11,8 @@ contextBridge.exposeInMainWorld("api", {
   saveSettings: (data) => ipcRenderer.invoke("save-settings", data),
   pingServer: (opts) => ipcRenderer.invoke("ping-server", opts),
   testConnection: (opts) => ipcRenderer.invoke("test-connection", opts),
-  checkOidcAvailable: (opts) => ipcRenderer.invoke("check-oidc-available", opts),
+  checkOidcAvailable: (opts) =>
+    ipcRenderer.invoke("check-oidc-available", opts),
 
   // OIDC auth — opens a modal browser window with the ABS OIDC flow
   startOidcLogin: (opts) => ipcRenderer.invoke("start-oidc-login", opts),
@@ -30,5 +31,10 @@ contextBridge.exposeInMainWorld("api", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("transfer-progress", handler);
     return () => ipcRenderer.removeListener("transfer-progress", handler);
+  },
+  onKindleAsinResolved: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("kindle-asin-resolved", handler);
+    return () => ipcRenderer.removeListener("kindle-asin-resolved", handler);
   },
 });

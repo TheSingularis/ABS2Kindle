@@ -29,7 +29,14 @@ const views = {
   kindle: document.getElementById("view-kindle"),
 };
 
+let currentView = null;
+
 function showView(name) {
+  // Refresh Kindle state when leaving the kindle view
+  if (currentView === "kindle" && name !== "kindle" && selectedKindle) {
+    refreshKindles();
+  }
+  currentView = name;
   Object.entries(views).forEach(([k, el]) => {
     el.classList.toggle("hidden", k !== name);
   });
@@ -72,6 +79,8 @@ let selectedKindle = null;
 // Sanitized stems of files currently on the selected Kindle.
 // Updated whenever Kindle books are loaded; used to badge library cards.
 let kindleBookStems = new Set();
+// Cleanup fn for the current background ASIN resolution listener.
+let cancelAsinListener = null;
 
 // Shared sanitizer — matches the filename sanitization used during send.
 const sanitizeTitle = (s) => s.replace(/[<>:"/\\|?*]/g, "_");
@@ -80,6 +89,7 @@ async function refreshKindles() {
   const list = document.getElementById("device-list");
   list.innerHTML = '<div class="no-device">Scanning…</div>';
   detectedKindles = await window.api.detectKindles();
+  console.log("Detected Kindles:", detectedKindles);
   renderKindleSidebar();
 }
 
@@ -90,7 +100,7 @@ function renderKindleSidebar() {
     list.innerHTML = '<div class="no-device">No Kindle detected</div>';
     selectedKindle = null;
     kindleBookStems.clear();
-    document.getElementById("search").dispatchEvent(new Event("input"));
+    applyFilters();
     updateBottomBar();
     return;
   }
@@ -160,6 +170,12 @@ async function loadKindleBooks(device) {
   const listEl = document.getElementById("kindle-book-list");
   listEl.innerHTML = '<div class="empty-state">Loading books…</div>';
 
+  // Cancel any in-flight ASIN resolution from a previous device/load
+  if (cancelAsinListener) {
+    cancelAsinListener();
+    cancelAsinListener = null;
+  }
+
   const result = await window.api.listKindleBooks({ device });
 
   if (!result.ok) {
@@ -198,10 +214,11 @@ async function loadKindleBooks(device) {
     }
     kindleBookStems.add(stemFromFilename(filename));
   }
-  // Re-render badges while preserving any active search filter.
-  document.getElementById("search").dispatchEvent(new Event("input"));
+  // Re-render badges while preserving any active search/sort/filter.
+  applyFilters();
 
   listEl.innerHTML = "";
+  const rowMap = new Map(); // filename → row element, for live ASIN updates
   result.files.forEach(({ filename, asin }) => {
     const stem = stemFromFilename(filename);
     // ASIN match is definitive; fall back to sanitized title stem
@@ -286,7 +303,60 @@ async function loadKindleBooks(device) {
     row.appendChild(textEl);
     row.appendChild(removeBtn);
     listEl.appendChild(row);
+    rowMap.set(filename, { row, thumbEl, nameEl });
   });
+
+  // Subscribe to background ASIN resolution events (Windows MTP only).
+  // As each ASIN arrives, update the cover/title and re-badge the grid.
+  let pendingAsin = result.files.filter(
+    ({ asin, filename }) => !asin && /\.(azw3|mobi|azw)$/i.test(filename),
+  ).length;
+  if (pendingAsin > 0) {
+    cancelAsinListener = window.api.onKindleAsinResolved(
+      ({ filename, asin }) => {
+        pendingAsin--;
+        if (asin) {
+          kindleBookStems.add(`asin:${asin}`);
+          applyFilters();
+          const entry = rowMap.get(filename);
+          const matchedBook = bookByAsin.get(asin);
+          if (entry && matchedBook) {
+            // Swap in cover image
+            if (matchedBook.media?.coverPath) {
+              const { thumbEl } = entry;
+              thumbEl.innerHTML = "";
+              const img = document.createElement("img");
+              img.src = `${settingsForRenderer.serverUrl}/api/items/${matchedBook.id}/cover?token=${settingsForRenderer.apiKey}`;
+              img.alt = "";
+              img.onerror = () => {
+                img.remove();
+                thumbEl.appendChild(icon("book"));
+              };
+              thumbEl.appendChild(img);
+            }
+            // Update title
+            const newTitle = matchedBook.media?.metadata?.title;
+            if (newTitle && entry.nameEl) entry.nameEl.textContent = newTitle;
+            // Add author if not already present
+            const authorName = matchedBook.media?.metadata?.authorName;
+            if (authorName) {
+              const textEl = entry.row.querySelector(".kindle-book-text");
+              if (textEl && !textEl.querySelector(".kindle-book-author")) {
+                const authorEl = document.createElement("span");
+                authorEl.className = "kindle-book-author";
+                authorEl.textContent = authorName;
+                textEl.appendChild(authorEl);
+              }
+            }
+          }
+        }
+        if (pendingAsin <= 0 && cancelAsinListener) {
+          cancelAsinListener();
+          cancelAsinListener = null;
+        }
+      },
+    );
+  }
 }
 
 document.getElementById("btn-back-to-library").addEventListener("click", () => {
@@ -303,16 +373,42 @@ document
   .getElementById("btn-close")
   .addEventListener("click", () => window.api.windowClose());
 
-// ── Search ────────────────────────────────────────────────────
-document.getElementById("search").addEventListener("input", (e) => {
-  const q = e.target.value.toLowerCase();
-  const filtered = allBooks.filter((b) => {
+// ── Search / Sort / Filter ───────────────────────────────────
+function applyFilters() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const sortBy = document.getElementById("sort-by").value;
+  const filterBy = document.getElementById("filter-by").value;
+
+  let books = allBooks.filter((b) => {
     const title = b.media?.metadata?.title?.toLowerCase() ?? "";
     const author = b.media?.metadata?.authorName?.toLowerCase() ?? "";
-    return title.includes(q) || author.includes(q);
+    if (q && !title.includes(q) && !author.includes(q)) return false;
+    if (filterBy === "has-asin" && !b.media?.metadata?.asin) return false;
+    if (filterBy === "missing-asin" && b.media?.metadata?.asin) return false;
+    return true;
   });
-  renderGrid(filtered);
-});
+
+  if (sortBy === "title") {
+    books = [...books].sort((a, b) =>
+      (a.media?.metadata?.title ?? "").localeCompare(
+        b.media?.metadata?.title ?? "",
+      ),
+    );
+  } else if (sortBy === "author") {
+    books = [...books].sort((a, b) =>
+      (a.media?.metadata?.authorName ?? "").localeCompare(
+        b.media?.metadata?.authorName ?? "",
+      ),
+    );
+  }
+  // "default" preserves server order (date added, newest first)
+
+  renderGrid(books);
+}
+
+document.getElementById("search").addEventListener("input", applyFilters);
+document.getElementById("sort-by").addEventListener("change", applyFilters);
+document.getElementById("filter-by").addEventListener("change", applyFilters);
 
 // ── Home (Personalized) View ──────────────────────────────────
 // Mirrors the ABS Home page: shelves returned by /api/libraries/:id/personalized
@@ -591,7 +687,7 @@ async function loadLibrary() {
   }
 
   allBooks = result.results ?? [];
-  document.getElementById("search").dispatchEvent(new Event("input"));
+  applyFilters();
 }
 
 function renderGrid(books) {
@@ -736,6 +832,7 @@ const TXFER_STEP_LABELS = {
   done: "Done",
   error: "Error",
   "dolphin-blocking": "Device busy",
+  "calibre-missing": "Calibre not found",
 };
 
 // Icon id for each step state.
@@ -746,6 +843,7 @@ const TXFER_STEP_ICON = {
   done: "check",
   error: "x",
   "dolphin-blocking": "alert",
+  "calibre-missing": "alert",
 };
 
 function showTransferOverlay(itemIds) {
@@ -806,10 +904,14 @@ function updateTransferRow(itemId, status, title, error, current, total) {
     const { row, iconWrap, stepEl } = entry;
 
     // Update step label
-    stepEl.textContent =
-      status === "error" && error
-        ? error
-        : (TXFER_STEP_LABELS[status] ?? status);
+    if (status === "calibre-missing") {
+      stepEl.innerHTML = `Calibre not found — <a href="https://calibre-ebook.com/download" target="_blank">download Calibre</a>`;
+    } else {
+      stepEl.textContent =
+        status === "error" && error
+          ? error
+          : (TXFER_STEP_LABELS[status] ?? status);
+    }
 
     // Swap icon
     const iconId = TXFER_STEP_ICON[status] ?? "refresh";
@@ -824,7 +926,11 @@ function updateTransferRow(itemId, status, title, error, current, total) {
     row.classList.remove("txfer-active", "txfer-done", "txfer-error");
     if (status === "done") {
       row.classList.add("txfer-done");
-    } else if (status === "error" || status === "dolphin-blocking") {
+    } else if (
+      status === "error" ||
+      status === "dolphin-blocking" ||
+      status === "calibre-missing"
+    ) {
       row.classList.add("txfer-error");
     } else {
       row.classList.add("txfer-active");
@@ -860,8 +966,12 @@ function finalizeTransferOverlay(succeeded, failed) {
   fill.style.width = "100%";
 
   const dolphinBlocking = failed.some((r) => r.error === "dolphin-blocking");
+  const calibreMissing = failed.some((r) => r.error === "calibre-missing");
   if (dolphinBlocking) {
     titleEl.textContent = "Device busy — close Dolphin and retry";
+  } else if (calibreMissing) {
+    titleEl.textContent =
+      "Calibre is required — see download link in book rows";
   } else if (failed.length === 0) {
     titleEl.textContent = `${succeeded.length} book${succeeded.length > 1 ? "s" : ""} sent successfully`;
   } else if (succeeded.length === 0) {
@@ -940,8 +1050,8 @@ document.getElementById("btn-send").addEventListener("click", async () => {
 
     if (succeededIds.size > 0) {
       // Re-render in place so on-Kindle badges appear immediately,
-      // preserving whatever search filter is active.
-      document.getElementById("search").dispatchEvent(new Event("input"));
+      // preserving whatever search/sort/filter is active.
+      applyFilters();
     }
   } catch (e) {
     removeListener();

@@ -16,7 +16,7 @@ Think knockoff iTunes for ABS → Kindle: browse the library, select audiobooks/
 - **Renderer**: `src/renderer/index.html` + `src/renderer/app.js` + `src/renderer/style.css`
 - **Preload bridge**: `src/preload.js` (context-isolated, `window.api`)
 - **Build**: `electron-builder` — targets AppImage/deb (Linux) and NSIS (Windows)
-- **Dev run**: `npm start` → `electron "$PWD"`
+- **Dev run**: `npm start` → `electron "$PWD"` (Linux); `npm run start:windows` → `electron .` (Windows)
 - **Kindle transport (KDE/MTP)**: `kioclient5` + kmtpd D-Bus (primary on KDE); GVFS FUSE (GNOME); `jmtpfs` FUSE (non-KDE fallback)
 
 ## File Map
@@ -43,6 +43,7 @@ Think knockoff iTunes for ABS → Kindle: browse the library, select audiobooks/
 - Path: `app.getPath("userData")/settings.json`
 - Shape: `{ serverUrl, apiKey }`
 - Loaded at startup via `loadSettings()`, merged on save via `saveSettings(data)`
+- **ASIN cache**: `app.getPath("userData")/kindle-asin-cache.json` — maps `filename → asin` for Windows MTP devices; written after successful transfer, evicted on delete, persisted across sessions
 
 ## `window.api` surface (preload.js)
 
@@ -64,25 +65,31 @@ getBooks({ libraryId }); // → { ok, books } | { ok: false, error }
 // Kindle
 detectKindles(); // → [ deviceObject, ... ]
 sendToKindle({ itemIds, kindleDocumentsPath, device }); // → { results: [...] }
+listKindleBooks({ device }); // → { ok, files: [{ filename, asin }] }
+deleteKindleBook({ device, filename }); // → { ok } | { ok: false, error }
 onTransferProgress(callback); // registers listener for "transfer-progress" events; returns unsubscribe fn
+onKindleAsinResolved(callback); // registers listener for "kindle-asin-resolved" events (Windows MTP background resolution); returns unsubscribe fn
 ```
 
 ## IPC Handlers (main.js)
 
-| Channel             | Type         | Notes                                                                                                                                                       |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ping`              | handle       | returns `"pong"`                                                                                                                                            |
-| `get-settings`      | handle       | returns in-memory `settingsStore`                                                                                                                           |
-| `save-settings`     | handle       | merges + writes `settings.json`                                                                                                                             |
-| `test-connection`   | handle       | GET `/api/libraries` with Bearer token                                                                                                                      |
-| `get-libraries`     | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                                                                                                          |
-| `get-books`         | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                                                                                                    |
-| `detect-kindles`    | handle       | 3-tier detection: GVFS → kmtpd → jmtpfs                                                                                                                     |
-| `send-to-kindle`    | handle       | downloads EPUB to tmp, converts, copies to Kindle; up to 3 books processed concurrently (steps 1–4), copy step serialised; emits `transfer-progress` events |
-| `transfer-progress` | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                                                                                                |
-| `window-minimize`   | on           | minimize focused window                                                                                                                                     |
-| `window-maximize`   | on           | toggle maximize on focused window                                                                                                                           |
-| `window-close`      | on           | close focused window                                                                                                                                        |
+| Channel              | Type         | Notes                                                                                                                                                       |
+| -------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ping`               | handle       | returns `"pong"`                                                                                                                                            |
+| `get-settings`       | handle       | returns in-memory `settingsStore`                                                                                                                           |
+| `save-settings`      | handle       | merges + writes `settings.json`                                                                                                                             |
+| `test-connection`    | handle       | GET `/api/libraries` with Bearer token                                                                                                                      |
+| `get-libraries`      | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                                                                                                          |
+| `get-books`          | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                                                                                                    |
+| `detect-kindles`     | handle       | Windows: Shell.Application COM; Linux: GVFS → kmtpd → jmtpfs                                                                                             |
+| `list-kindle-books`  | handle       | Lists books on connected Kindle; Windows MTP returns cached ASINs and kicks off background resolution |
+| `delete-kindle-book` | handle       | Deletes a book from Kindle by filename; evicts ASIN cache on Windows MTP                                                                                   |
+| `send-to-kindle`     | handle       | downloads EPUB to tmp, converts, copies to Kindle; up to 3 books processed concurrently (steps 1–4), copy step serialised; emits `transfer-progress` events |
+| `transfer-progress`  | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                                                                                                |
+| `kindle-asin-resolved` | send (event) | main → renderer (Windows MTP only); payload `{ filename, asin }` as background resolution completes                                                      |
+| `window-minimize`    | on           | minimize focused window                                                                                                                                     |
+| `window-maximize`    | on           | toggle maximize on focused window                                                                                                                           |
+| `window-close`       | on           | close focused window                                                                                                                                        |
 
 ### Transfer progress `status` values
 
@@ -94,15 +101,16 @@ onTransferProgress(callback); // registers listener for "transfer-progress" even
 | `error`            | Generic failure                                            |
 | `dolphin-blocking` | Non-KDE: file manager holds MTP device; user must close it |
 
-## Kindle Detection — 3-Tier Chain (`detect-kindles`)
+## Kindle Detection
 
-Detection runs in priority order; first non-empty result wins:
+Detection is platform-aware. On Windows, Shell.Application COM is used. On Linux, the 3-tier chain runs in priority order; first non-empty result wins:
 
-| Tier | Function              | Works On                                                                       |
-| ---- | --------------------- | ------------------------------------------------------------------------------ |
-| 1    | `findKindleMounts()`  | GVFS FUSE (`/run/user/<uid>/gvfs/`) + USB mass storage + Windows drive letters |
-| 2    | `findKmtpdDevices()`  | KDE — queries `org.kde.kiod6` D-Bus (kmtpd module)                             |
-| 3    | `findJmtpfsDevices()` | Non-KDE Linux — mounts via `jmtpfs` FUSE                                       |
+| Tier | Platform | Function                  | Works On                                                                       |
+| ---- | -------- | ------------------------- | ------------------------------------------------------------------------------ |
+| —    | Windows  | `findKindleMountsWindows()` | Windows — Shell.Application enumerates MTP devices                           |
+| 1    | Linux    | `findKindleMounts()`      | GVFS FUSE (`/run/user/<uid>/gvfs/`) + USB mass storage                         |
+| 2    | Linux    | `findKmtpdDevices()`      | KDE — queries `org.kde.kiod6` D-Bus (kmtpd module)                             |
+| 3    | Linux    | `findJmtpfsDevices()`     | Non-KDE Linux — mounts via `jmtpfs` FUSE                                       |
 
 ### `findKmtpdDevices()` detail
 
@@ -115,12 +123,17 @@ Detection runs in priority order; first non-empty result wins:
 ### Device object shapes
 
 ```js
+// Windows MTP (Shell.Application)
+{ name, deviceName, storageName, isMtpWindows: true, documentsPath: null, bookCount }
+
 // kmtpd (KDE)
 { name, storageName, documentsPath, kioDocumentsUri, bookCount, via: "kmtpd" }
 
 // GVFS / USB / jmtpfs
 { name, path, documentsPath, bookCount }   // built by buildDeviceEntry()
 ```
+
+**Windows note**: `documentsPath` is `null` for Windows MTP devices. All file ops go through PowerShell + `Shell.Application` COM. All user-supplied strings interpolated into PowerShell scripts must be escaped with `psEsc = (s) => s.replace(/'/g, "''")`.
 
 ## Transfer Pipeline — `send-to-kindle` handler
 
@@ -130,12 +143,15 @@ Up to 3 books are processed concurrently through steps 1–4. Step 5 (copy) is a
 Per book (up to 3 concurrent):
 1. absRequest items/:id          → fetch metadata (title, ASIN)
 2. GET /api/items/:id/ebook      → download EPUB to /tmp/abs2k_<itemId>.epub
-3. convertEpubToAzw3()           → ebook-convert epub → azw3 (--output-profile=kindle_pw3)
+3. convertEpubToAzw3()           → ebook-convert epub → azw3 (--output-profile=kindle_pw3) [async — non-blocking]
 4. injectAsinIntoAzw3()          → overwrite EXTH type-113 in-place with real ASIN (null-padded)
 
 Serial copy gate (one at a time):
 5. copyToKindle()                → transfer .azw3 to Kindle documents folder
 ```
+
+- `convertEpubToAzw3` is **async** (wraps `execFile` in a Promise) — the main thread stays responsive during conversion
+- On Windows: the tmp file is renamed to `<safeTitle>.azw3` before `CopyHere` (Shell.Application always uses source filename), then renamed back for cleanup
 
 - Tmp files are named `abs2k_<itemId>.epub/.azw3` to avoid collisions between concurrent tasks
 - If the item has no ASIN in ABS metadata, conversion still proceeds but ASIN injection is skipped (warning logged)
@@ -169,7 +185,7 @@ The `.desktop` `Exec` line always invokes the wrapper script — no dev/prod spl
 ## UI Structure
 
 ```
-#titlebar        drag region, search bar, WM buttons (min/max/close)
+#titlebar        drag region, WM buttons (min/max/close)
 #sidebar
   #nav-library   → shows #view-library
   #nav-settings  → shows #view-settings
@@ -177,7 +193,12 @@ The `.desktop` `Exec` line always invokes the wrapper script — no dev/prod spl
     .device-entry       normal detected device
     .device-busy        device held by file manager (non-KDE only)
 #content
-  #view-library  #book-grid
+  #view-library
+    #library-toolbar   sticky toolbar (top of library view)
+      #search          text search
+      #sort-by         select: date added / title / author
+      #filter-by       select: all / has ASIN / missing ASIN
+    #book-grid
   #view-settings
     #settings-form
       #input-url      server URL
@@ -192,7 +213,9 @@ The `.desktop` `Exec` line always invokes the wrapper script — no dev/prod spl
 - Frameless window (`frame: false`); custom titlebar handles WM actions
 - `contextIsolation: true`, `nodeIntegration: false` — all Node access goes through preload
 - `app.commandLine.appendSwitch("disable-gpu-vsync")` suppresses VSync log noise
-- `requestSingleInstanceLock()` enforced — second instance quits immediately
+- `requestSingleInstanceLock()` enforced — second instance quits immediately; kill leftover `electron.exe` processes before re-launching on Windows
 - `http`/`https` used for outbound requests (not `electron.net`); `rejectUnauthorized: false` on `test-connection` to tolerate self-signed certs
 - **Never kill `kiod6`** — it owns the USB MTP interface on KDE; killing it drops the Kindle connection entirely
 - No udev rules required — `kioclient5` works within the existing KDE MTP session
+- **PowerShell escaping**: all user/device strings interpolated into PS scripts must go through `psEsc = (s) => s.replace(/'/g, "''")` (single-quote doubling for PS single-quoted strings)
+- **Library filtering**: `applyFilters()` in `app.js` is the single entry point for re-rendering the book grid — call it instead of dispatching synthetic `input` events on `#search`
