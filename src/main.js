@@ -40,6 +40,7 @@ const {
 const {
   DOLPHIN_BLOCKING_ERROR,
   CALIBRE_NOT_FOUND_ERROR,
+  detectEbookFormat,
   convertEpubToAzw3,
   injectAsinIntoAzw3,
   readAsinFromBuffer,
@@ -548,7 +549,7 @@ ipcMain.handle(
         const asin = meta.asin ?? null;
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
 
-        // ── Step 2: download EPUB to tmp ──────────────────────
+        // ── Step 2: download ebook to tmp ─────────────────────
         // Use itemId in filename to avoid collisions on concurrent downloads
         // of books that happen to sanitize to the same title.
         epubPath = path.join(tmpDir, `abs2k_${itemId}.epub`);
@@ -558,7 +559,22 @@ ipcMain.handle(
           epubPath,
         );
 
-        // ── Step 3: convert EPUB → AZW3 ──────────────────────
+        // ABS may serve MOBI/AZW3 instead of EPUB — detect from magic bytes
+        // and rename so Calibre picks the right input plugin.
+        const ebookFmt = detectEbookFormat(epubPath);
+        if (ebookFmt === "unknown") {
+          throw new Error(
+            `Unsupported ebook format — ABS returned an unrecognised file for "${title}". Only EPUB and MOBI/AZW3 are supported.`,
+          );
+        }
+        if (ebookFmt === "mobi") {
+          // Rename to .mobi so Calibre uses the mobi_input plugin for conversion.
+          const mobiPath = path.join(tmpDir, `abs2k_${itemId}.mobi`);
+          fs.renameSync(epubPath, mobiPath);
+          epubPath = mobiPath;
+        }
+
+        // ── Step 3: convert to AZW3 ──────────────────────────
         progress("converting", { title });
         azw3Path = path.join(tmpDir, `abs2k_${itemId}.azw3`);
         await convertEpubToAzw3(epubPath, azw3Path);

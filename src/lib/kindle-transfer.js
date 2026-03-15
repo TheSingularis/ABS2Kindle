@@ -36,6 +36,34 @@ function resolveEbookConvert() {
 }
 
 /**
+ * Detect the ebook format of a downloaded file from its magic bytes as the download endpoint returns a raw binary stream with no file extension.
+ * Returns 'epub', 'mobi', or 'unknown'.
+ * EPUB files are ZIP archives (PK\x03\x04 magic).
+ * MOBI/AZW/AZW3 files are PalmDB files with 'BOOKMOBI' at offset 60.
+ */
+function detectEbookFormat(filePath) {
+  try {
+    const fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(68);
+    const bytesRead = fs.readSync(fd, buf, 0, 68, 0);
+    fs.closeSync(fd);
+    if (
+      bytesRead >= 4 &&
+      buf[0] === 0x50 &&
+      buf[1] === 0x4b &&
+      buf[2] === 0x03 &&
+      buf[3] === 0x04
+    ) {
+      return "epub";
+    }
+    if (bytesRead >= 68 && buf.toString("ascii", 60, 68) === "BOOKMOBI") {
+      return "mobi";
+    }
+  } catch (_) {}
+  return "unknown";
+}
+
+/**
  * Convert an EPUB to AZW3 using Calibre's ebook-convert.
  * Throws if ebook-convert is not installed or the conversion fails.
  */
@@ -321,6 +349,7 @@ function copyToKindleWindows(srcPath, deviceName, storageName, filename) {
 module.exports = {
   DOLPHIN_BLOCKING_ERROR,
   CALIBRE_NOT_FOUND_ERROR,
+  detectEbookFormat,
   convertEpubToAzw3,
   injectAsinIntoAzw3,
   readAsinFromBuffer,
