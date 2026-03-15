@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { execFile } = require("child_process");
 
 /**
  * Build a device entry object for GVFS/USB/jmtpfs mounts.
@@ -88,19 +89,12 @@ function findKindleMounts() {
       } catch (_) {}
     }
   } else if (platform === "win32") {
-    for (const letter of "DEFGHIJKLMNOPQRSTUVWXYZ") {
-      const drivePath = `${letter}:\\`;
-      try {
-        const documentsPath = `${drivePath}documents`;
-        if (fs.existsSync(drivePath) && fs.existsSync(documentsPath)) {
-          found.push(buildDeviceEntry(drivePath, `Kindle (${letter}:)`, documentsPath));
-        }
-      } catch (_) {}
-    }
+    return findKindleMountsWindows();
   }
-
   return found;
 }
+
+
 
 /**
  * Detect Kindles via KDE's kmtpd D-Bus service.
@@ -108,7 +102,7 @@ function findKindleMounts() {
  * without conflicting with kmtpd's USB interface ownership.
  */
 function findKmtpdDevices() {
-  const { execSync } = require("child_process");
+  const { execSync, exec } = require("child_process");
   const found = [];
 
   const dbusGet = (objPath, method, ...args) => {
@@ -186,6 +180,65 @@ function findKmtpdDevices() {
   return found;
 }
 
+function findKindleMountsWindows() {
+  return new Promise((resolve) => {
+    const script = `
+      $shell = New-Object -ComObject Shell.Application
+      $items = $shell.NameSpace(17).Items()
+      foreach ($item in $items) {
+        if ($item.Name -like '*Kindle*') {
+          $folder = $item.GetFolder
+          foreach ($storage in $folder.Items()) {
+            $storageFolder = $storage.GetFolder
+            foreach ($sub in $storageFolder.Items()) {
+              if ($sub.Name -eq 'documents') {
+                $docFolder = $sub.GetFolder
+                $bookCount = 0
+                foreach ($f in $docFolder.Items()) {
+                  $n = $f.Name
+                  if ($n -like '*.epub' -or $n -like '*.mobi' -or $n -like '*.azw3' -or $n -like '*.azw') {
+                    $bookCount++
+                  }
+                }
+                Write-Output "$($item.Name)|$($storage.Name)|$bookCount"
+              }
+            }
+          }
+        }
+      }
+    `;
+    execFile(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      (err, stdout, stderr) => {
+        // console.log("stdout:", stdout);
+        // console.log("stderr:", stderr);
+        if (err || !stdout.trim()) return resolve([]);
+
+        const results = stdout
+          .trim()
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [deviceName, storageName, bookCount] = line.split("|");
+            return {
+              name: deviceName,
+              deviceName,
+              storageName,
+              path: null, // no real fs path on Windows MTP
+              documentsPath: null, // transfer handled via PowerShell
+              bookCount: parseInt(bookCount) || 0,
+              isMtpWindows: true, // flag so send handler knows to use PowerShell copy
+            };
+          });
+
+        resolve(results);
+      },
+    );
+  });
+}
+
 /**
  * Detect Kindles via jmtpfs FUSE mounts (non-KDE fallback).
  */
@@ -247,4 +300,4 @@ function findJmtpfsDevices() {
   return found;
 }
 
-module.exports = { findKindleMounts, findKmtpdDevices, findJmtpfsDevices };
+module.exports = { findKindleMounts, findKmtpdDevices, findJmtpfsDevices, findKindleMountsWindows };

@@ -1,20 +1,59 @@
 const fs = require("fs");
 const path = require("path");
+const execFile = require("child_process").execFile;
 
 const DOLPHIN_BLOCKING_ERROR = "DOLPHIN_BLOCKING";
+const CALIBRE_NOT_FOUND_ERROR = "CALIBRE_NOT_FOUND";
+
+/**
+ * Resolve the ebook-convert executable path.
+ * On Windows, Calibre is typically not in PATH, so we probe known install dirs.
+ */
+function resolveEbookConvert() {
+  if (process.platform === "win32") {
+    const candidates = [
+      path.join(
+        process.env["ProgramFiles"] || "C:\\Program Files",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+      path.join(
+        process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+      path.join(
+        process.env["LOCALAPPDATA"] || "",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return "ebook-convert";
+}
 
 /**
  * Convert an EPUB to AZW3 using Calibre's ebook-convert.
  * Throws if ebook-convert is not installed or the conversion fails.
  */
 function convertEpubToAzw3(epubPath, azw3Path) {
-  const { execFileSync } = require("child_process");
   if (fs.existsSync(azw3Path)) fs.unlinkSync(azw3Path);
-  execFileSync(
-    "ebook-convert",
-    [epubPath, azw3Path, "--output-profile=kindle_pw3"],
-    { timeout: 180_000, stdio: ["ignore", "ignore", "pipe"] },
-  );
+  return new Promise((resolve, reject) => {
+    execFile(
+      resolveEbookConvert(),
+      [epubPath, azw3Path, "--output-profile=kindle_pw3"],
+      { timeout: 180_000 },
+      (err) => {
+        if (!err) return resolve();
+        if (err.code === "ENOENT")
+          return reject(new Error(CALIBRE_NOT_FOUND_ERROR));
+        reject(err);
+      },
+    );
+  });
 }
 
 /**
@@ -165,43 +204,55 @@ async function copyToKindle(srcPath, destPath, device) {
     return;
   }
 
-  // ── Non-Linux: plain copy only ───────────────────────────────
-  if (process.platform !== "linux") {
-    fs.copyFileSync(srcPath, destPath);
-    return;
-  }
+  // ── Windows ───────────────────────────────
+  const filename = path.basename(destPath);
 
-  // ── Attempt 1: direct fs copy (GVFS FUSE / USB mass storage) ─
-  try {
-    fs.copyFileSync(srcPath, destPath);
-    return;
-  } catch (e1) {
-    console.warn(
-      "copyToKindle: fs.copyFileSync failed, trying gio:",
-      e1.message,
-    );
-  }
-
-  // ── Attempt 2: gio copy ──────────────────────────────────────
-  try {
-    await new Promise((resolve, reject) => {
-      execFile(
-        "gio",
-        ["copy", srcPath, destPath],
-        { timeout: 30000 },
-        (err, _stdout, stderr) => {
-          if (err) {
-            reject(
-              new Error(`gio copy failed: ${(stderr || err.message).trim()}`),
-            );
-          } else {
-            resolve();
-          }
-        },
+  if (process.platform === "win32") {
+    if (device && device.isMtpWindows) {
+      await copyToKindleWindows(
+        srcPath,
+        device.deviceName,
+        device.storageName,
+        filename,
       );
-    });
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
     return;
-  } catch (e2) {
+  } else if (process.platform === "linux") {
+    // ── Linux (non-KDE): try direct fs copy, then gio fallback ───────
+
+    // ── Attempt 1: direct fs copy (GVFS FUSE / USB mass storage) ─
+    try {
+      fs.copyFileSync(srcPath, destPath);
+      return;
+    } catch (e1) {
+      console.warn(
+        "copyToKindle: fs.copyFileSync failed, trying gio:",
+        e1.message,
+      );
+    }
+
+    // ── Attempt 2: gio copy ──────────────────────────────────────
+    try {
+      await new Promise((resolve, reject) => {
+        execFile(
+          "gio",
+          ["copy", srcPath, destPath],
+          { timeout: 30000 },
+          (err, _stdout, stderr) => {
+            if (err) {
+              reject(
+                new Error(`gio copy failed: ${(stderr || err.message).trim()}`),
+              );
+            } else {
+              resolve();
+            }
+          },
+        );
+      });
+      return;
+    } catch (e2) {}
     console.warn("copyToKindle: gio copy failed:", e2.message);
   }
 
@@ -209,8 +260,67 @@ async function copyToKindle(srcPath, destPath, device) {
   throw new Error(DOLPHIN_BLOCKING_ERROR);
 }
 
+function copyToKindleWindows(srcPath, deviceName, storageName, filename) {
+  return new Promise((resolve, reject) => {
+    // CopyHere copies the file keeping its source filename, so we rename the
+    // tmp file to the desired destination name before copying, then restore it.
+    const srcDir = path.dirname(srcPath);
+    const renamedPath = path.join(srcDir, filename);
+    let didRename = false;
+    try {
+      fs.renameSync(srcPath, renamedPath);
+      didRename = true;
+    } catch (e) {
+      return reject(new Error(`Failed to stage file for copy: ${e.message}`));
+    }
+
+    const safeSrc = renamedPath.replace(/\//g, "\\");
+    // Escape single quotes for PowerShell single-quoted strings by doubling them
+    const psEsc = (s) => s.replace(/'/g, "''");
+    const script = `
+        $shell = New-Object -ComObject Shell.Application
+        $device = $shell.NameSpace(17).Items() | Where-Object { $_.Name -eq '${psEsc(deviceName)}' }
+        if (-not $device) { Write-Error "Device not found"; exit 1 }
+        $storage = $device.GetFolder.Items() | Where-Object { $_.Name -like '*${psEsc(storageName)}*' }
+        if (-not $storage) { Write-Error "Storage not found"; exit 1 }
+        $docs = $storage.GetFolder.Items() | Where-Object { $_.Name -eq 'documents' }
+        if (-not $docs) { Write-Error "Documents folder not found"; exit 1 }
+        $docsFolder = $docs.GetFolder
+        $docsFolder.CopyHere('${psEsc(safeSrc)}')
+        # Wait for copy to finish
+        $timeout = 30
+        $elapsed = 0
+        while ($elapsed -lt $timeout) {
+            Start-Sleep -Milliseconds 500
+            $existing = $docsFolder.Items() | Where-Object { $_.Name -eq '${psEsc(filename)}' }
+            if ($existing) { break }
+            $elapsed += 0.5
+        }
+        Write-Output "OK"
+        `;
+    execFile(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { timeout: 60000 },
+      (err, stdout, stderr) => {
+        // Restore original tmp filename so main.js can clean it up normally
+        if (didRename) {
+          try {
+            fs.renameSync(renamedPath, srcPath);
+          } catch (_) {}
+        }
+        if (err) reject(new Error(stderr || err.message));
+        else if (!stdout.includes("OK"))
+          reject(new Error("Copy may not have completed"));
+        else resolve();
+      },
+    );
+  });
+}
+
 module.exports = {
   DOLPHIN_BLOCKING_ERROR,
+  CALIBRE_NOT_FOUND_ERROR,
   convertEpubToAzw3,
   injectAsinIntoAzw3,
   readAsinFromBuffer,

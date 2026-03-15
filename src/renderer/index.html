@@ -102,7 +102,6 @@
                 <div class="drag-region">
                     <span class="app-name">ABS<span class="dim">2</span>Kindle</span>
                 </div>
-                <input type="text" id="search" placeholder="Search library…" />
                 <div class="wm-buttons">
                     <button class="wm-btn minimize" id="btn-minimize">−</button>
                     <button class="wm-btn maximize" id="btn-maximize">⤢</button>
@@ -156,6 +155,19 @@
 
                     <!-- Book grid view -->
                     <div id="view-library">
+                        <div id="library-toolbar">
+                            <input type="text" id="search" placeholder="Search library…" autocomplete="off" spellcheck="false" />
+                            <select id="sort-by" title="Sort">
+                                <option value="default">Date Added</option>
+                                <option value="title">Title A→Z</option>
+                                <option value="author">Author A→Z</option>
+                            </select>
+                            <select id="filter-by" title="Filter">
+                                <option value="all">All books</option>
+                                <option value="has-asin">Has ASIN</option>
+                                <option value="missing-asin">Missing ASIN</option>
+                            </select>
+                        </div>
                         <div id="book-grid">
                             <div class="empty-state">Configure your ABS server in Settings to get started.</div>
                         </div>

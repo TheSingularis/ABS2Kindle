@@ -1,20 +1,45 @@
-const { app, BrowserWindow, ipcMain, session } = require("electron");
+const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const https = require("https");
 const crypto = require("crypto");
+const execFile = require("child_process").execFile;
 
 const { settingsStore, loadSettings, saveSettings } = require("./lib/settings");
+
+// ── Windows MTP ASIN cache ────────────────────────────────────
+// Maps filename (e.g. "My Book.azw3") → ASIN string.
+// Persisted to userData so cover matching works after app restarts.
+const ASIN_CACHE_PATH = path.join(
+  app.getPath("userData"),
+  "kindle-asin-cache.json",
+);
+let asinCache = {};
+try {
+  if (fs.existsSync(ASIN_CACHE_PATH)) {
+    asinCache = JSON.parse(fs.readFileSync(ASIN_CACHE_PATH, "utf8"));
+  }
+} catch (_) {
+  asinCache = {};
+}
+
+function saveAsinCache() {
+  try {
+    fs.writeFileSync(ASIN_CACHE_PATH, JSON.stringify(asinCache, null, 2));
+  } catch (_) {}
+}
 const { absRequest, downloadFile } = require("./lib/abs-client");
 const {
   findKindleMounts,
+  findKindleMountsWindows,
   findKmtpdDevices,
   findJmtpfsDevices,
 } = require("./lib/kindle-detect");
 const {
   DOLPHIN_BLOCKING_ERROR,
+  CALIBRE_NOT_FOUND_ERROR,
   convertEpubToAzw3,
   injectAsinIntoAzw3,
   readAsinFromBuffer,
@@ -38,6 +63,12 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://") || url.startsWith("http://")) {
+      shell.openExternal(url);
+    }
+    return { action: "deny" };
   });
   win.loadFile(path.join(__dirname, "renderer/index.html"));
   mainWindow = win;
@@ -441,7 +472,16 @@ ipcMain.handle("get-personalized", async (_, { libraryId }) => {
 });
 
 // ── IPC: Kindle detection ─────────────────────────────────────
-ipcMain.handle("detect-kindles", () => {
+ipcMain.handle("detect-kindles", async () => {
+  // -- Windows handling --
+  if (process.platform === "win32") {
+    const result = await findKindleMountsWindows();
+    console.log("Windows kindle detection result: ", result);
+    return result;
+  }
+
+  // -- Linux handling --
+
   // 1. GVFS / USB mass storage (GNOME and non-KDE)
   const found = findKindleMounts();
   if (found.length > 0) return found;
@@ -521,7 +561,7 @@ ipcMain.handle(
         // ── Step 3: convert EPUB → AZW3 ──────────────────────
         progress("converting", { title });
         azw3Path = path.join(tmpDir, `abs2k_${itemId}.azw3`);
-        convertEpubToAzw3(epubPath, azw3Path);
+        await convertEpubToAzw3(epubPath, azw3Path);
         fs.unlinkSync(epubPath);
         epubPath = null;
 
@@ -542,8 +582,15 @@ ipcMain.handle(
             throw new Error("Transfer aborted due to device busy");
           }
           progress("copying", { title });
-          const destPath = path.join(kindleDocumentsPath, `${safeTitle}.azw3`);
+          const destPath = kindleDocumentsPath
+            ? path.join(kindleDocumentsPath, `${safeTitle}.azw3`)
+            : `${safeTitle}.azw3`;
           await copyToKindle(azw3Path, destPath, device);
+          // Cache ASIN for Windows MTP (no direct file read possible later)
+          if (device && device.isMtpWindows && asin) {
+            asinCache[path.basename(destPath)] = asin;
+            saveAsinCache();
+          }
           fs.unlinkSync(azw3Path);
           azw3Path = null;
         });
@@ -560,18 +607,26 @@ ipcMain.handle(
         } catch (_) {}
 
         const isDolphinBlocking = e.message === DOLPHIN_BLOCKING_ERROR;
+        const isCalibreMissing = e.message === CALIBRE_NOT_FOUND_ERROR;
         if (isDolphinBlocking) abortCopies = true;
 
-        progress(isDolphinBlocking ? "dolphin-blocking" : "error", {
-          error: isDolphinBlocking
-            ? "Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again."
-            : e.message,
-        });
+        const progressStatus = isDolphinBlocking
+          ? "dolphin-blocking"
+          : isCalibreMissing
+            ? "calibre-missing"
+            : "error";
+        const progressError = isDolphinBlocking
+          ? "Dolphin may be holding the device. Close any Dolphin windows showing your Kindle and try again."
+          : isCalibreMissing
+            ? "Calibre is required for conversion. Download it at https://calibre-ebook.com/download"
+            : e.message;
+
+        progress(progressStatus, { error: progressError });
 
         results.push({
           itemId,
           ok: false,
-          error: isDolphinBlocking ? "dolphin-blocking" : e.message,
+          error: progressStatus,
         });
       }
     };
@@ -592,7 +647,91 @@ ipcMain.handle(
 
 // ──── Kindle Book Management ──────────────────────────────────
 
-ipcMain.handle("list-kindle-books", async (_, { device }) => {
+/**
+ * Copy a single file from a Windows MTP device to a temp directory via
+ * Shell.Application CopyHere, then return the full local path of the copy.
+ * The caller is responsible for deleting the file when done.
+ */
+function copyFromKindleToTemp(device, filename, tmpDir) {
+  const psEsc = (s) => s.replace(/'/g, "''");
+  const script = `
+    $shell = New-Object -ComObject Shell.Application
+    $dev = $shell.NameSpace(17).Items() | Where-Object { $_.Name -eq '${psEsc(device.deviceName)}' }
+    if (-not $dev) { Write-Error "Device not found"; exit 1 }
+    $storage = $dev.GetFolder.Items() | Where-Object { $_.Name -eq '${psEsc(device.storageName)}' }
+    if (-not $storage) { Write-Error "Storage not found"; exit 1 }
+    $docs = $storage.GetFolder.Items() | Where-Object { $_.Name -eq 'documents' }
+    if (-not $docs) { Write-Error "Documents not found"; exit 1 }
+    $file = $docs.GetFolder.Items() | Where-Object { $_.Name -eq '${psEsc(filename)}' }
+    if (-not $file) { Write-Error "File not found"; exit 1 }
+    $tmpShell = $shell.NameSpace('${psEsc(tmpDir)}')
+    $tmpShell.CopyHere($file)
+    $dest = Join-Path '${psEsc(tmpDir)}' '${psEsc(filename)}'
+    $timeout = 60; $elapsed = 0
+    while ($elapsed -lt $timeout) {
+      if (Test-Path $dest) { Write-Output $dest; exit 0 }
+      Start-Sleep -Milliseconds 500; $elapsed += 0.5
+    }
+    Write-Error "Timeout waiting for copy"; exit 1
+  `;
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { timeout: 90000 },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error((stderr || err.message).trim()));
+        else resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+/**
+ * Background task: for each uncached AZW3/MOBI on a Windows MTP Kindle,
+ * copy to temp, read ASIN, delete, cache, and push a kindle-asin-resolved
+ * event to the renderer. Runs serially — MTP is not safe for concurrent ops.
+ */
+async function resolveAsinBackground(filenames, device, sender) {
+  for (const filename of filenames) {
+    if (sender.isDestroyed()) return;
+    // Skip if resolved by a concurrent call (e.g. user re-detected)
+    if (asinCache[filename]) {
+      sender.send("kindle-asin-resolved", {
+        filename,
+        asin: asinCache[filename],
+      });
+      continue;
+    }
+    const tmpDir = path.join(
+      os.tmpdir(),
+      `abs2kindle_asin_${crypto.randomBytes(4).toString("hex")}`,
+    );
+    let tmpFile = null;
+    try {
+      fs.mkdirSync(tmpDir, { recursive: true });
+      tmpFile = await copyFromKindleToTemp(device, filename, tmpDir);
+      const asin = readAsinFromAzw3(tmpFile);
+      if (asin) {
+        asinCache[filename] = asin;
+        saveAsinCache();
+      }
+      if (!sender.isDestroyed())
+        sender.send("kindle-asin-resolved", { filename, asin });
+    } catch (e) {
+      console.warn(`resolveAsinBackground: ${filename}:`, e.message);
+      if (!sender.isDestroyed())
+        sender.send("kindle-asin-resolved", { filename, asin: null });
+    } finally {
+      try {
+        if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
+  }
+}
+
+ipcMain.handle("list-kindle-books", async (event, { device }) => {
   const { execSync, spawn } = require("child_process");
   const BOOK_EXTS = [".epub", ".mobi", ".azw3", ".azw", ".pdf"];
 
@@ -643,7 +782,60 @@ ipcMain.handle("list-kindle-books", async (_, { device }) => {
     });
   };
 
+  const psEsc = (s) => s.replace(/'/g, "''");
   try {
+    if (device.isMtpWindows) {
+      const script = `
+        $shell = New-Object -ComObject Shell.Application
+        $items = $shell.NameSpace(17).Items()
+        foreach ($item in $items) {
+          if ($item.Name -eq '${psEsc(device.deviceName)}') {
+            $storage = $item.GetFolder.Items() | Where-Object { $_.Name -eq '${psEsc(device.storageName)}' }
+            $docs = $storage.GetFolder.Items() | Where-Object { $_.Name -eq 'documents' }
+            foreach ($f in $docs.GetFolder.Items()) {
+              Write-Output $f.Name
+            }
+          }
+        }
+      `;
+      return await new Promise((resolve) => {
+        execFile(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", script],
+          (err, stdout) => {
+            if (err) return resolve({ ok: false, error: err.message });
+            const files = stdout
+              .trim()
+              .split("\n")
+              .map((l) => l.trim())
+              .filter((f) =>
+                BOOK_EXTS.some((ext) => f.toLowerCase().endsWith(ext)),
+              )
+              .map((filename) => ({
+                filename,
+                asin: asinCache[filename] ?? null,
+              }));
+
+            // Kick off background ASIN resolution for uncached AZW3/MOBI files.
+            // Returns immediately; events arrive via "kindle-asin-resolved".
+            const uncached = files
+              .filter(
+                ({ asin, filename }) =>
+                  !asin && /\.(azw3|mobi|azw)$/i.test(filename),
+              )
+              .map(({ filename }) => filename);
+            if (uncached.length > 0) {
+              resolveAsinBackground(uncached, device, event.sender).catch(
+                console.error,
+              );
+            }
+
+            resolve({ ok: true, files });
+          },
+        );
+      });
+    }
+
     if (device.via === "kmtpd") {
       const lsOut = execSync(
         `kioclient5 --noninteractive ls "${device.kioDocumentsUri}"`,
@@ -686,6 +878,45 @@ ipcMain.handle("delete-kindle-book", async (_, { device, filename }) => {
   }
 
   try {
+    if (device.isMtpWindows) {
+      const psEsc = (s) => s.replace(/'/g, "''");
+      const script = `
+        $shell = New-Object -ComObject Shell.Application
+        $items = $shell.NameSpace(17).Items()
+        foreach ($item in $items) {
+          if ($item.Name -eq '${psEsc(device.deviceName)}') {
+            $storage = $item.GetFolder.Items() | Where-Object { $_.Name -eq '${psEsc(device.storageName)}' }
+            $docs = $storage.GetFolder.Items() | Where-Object { $_.Name -eq 'documents' }
+            $file = $docs.GetFolder.Items() | Where-Object { $_.Name -eq '${psEsc(filename)}' }
+            if ($file) {
+              $file.InvokeVerb('delete')
+              Write-Output "OK"
+            } else {
+              Write-Error "File not found: ${psEsc(filename)}"
+            }
+          }
+        }
+      `;
+      return await new Promise((resolve) => {
+        execFile(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", script],
+          (err, stdout, stderr) => {
+            if (err)
+              return resolve({ ok: false, error: stderr || err.message });
+            if (!stdout.includes("OK"))
+              return resolve({ ok: false, error: "File not found" });
+            // Evict from ASIN cache
+            if (asinCache[filename]) {
+              delete asinCache[filename];
+              saveAsinCache();
+            }
+            resolve({ ok: true });
+          },
+        );
+      });
+    }
+
     if (device.via === "kmtpd") {
       const kioUri = `${device.kioDocumentsUri}/${filename}`;
       execSync(`kioclient5 --noninteractive remove "${kioUri}"`, {
