@@ -136,7 +136,7 @@ async function copyToKindle(srcPath, destPath, device) {
 
   // ── KDE/kmtpd: use kioclient5 ────────────────────────────────
   if (device && device.via === "kmtpd") {
-    const filename = path.basename(srcPath);
+    const filename = path.basename(destPath);
     const kioDestUri = `${device.kioDocumentsUri}/${filename}`;
     await new Promise((resolve, reject) => {
       execFile(
