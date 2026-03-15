@@ -150,3 +150,7 @@ npm run build:win
 - Node `http`/`https` for ABS API requests
 - KDE: `kioclient5` + kmtpd D-Bus for Kindle access
 - GNOME/other: GVFS FUSE mount or `jmtpfs`
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
