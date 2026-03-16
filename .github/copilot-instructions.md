@@ -5,8 +5,9 @@
 - **Always update `README.md`** after any major changes (new features, changed behaviour, updated setup steps, new dependencies, etc.).
 - **On every release / version tag**, always:
   1. Update `CHANGELOG.md` — add a new `## [vX.Y.Z] — YYYY-MM-DD` block at the top with all changes grouped under `Added`, `Fixed`, `Changed`, `Removed`; add a reference link at the bottom.
-  2. Commit the changelog before or alongside the tag.
-  3. Write a **verbose GitHub release body** that includes every `Added` / `Fixed` / `Changed` / `Removed` item from that version's changelog section — never just a one-liner.
+  2. **Write changelog entries for end users, not developers.** Describe what the user sees or experiences — never mention internal implementation details (class names, function names, architectural patterns, CSS properties, etc.). Ask: *"would a non-technical user find this meaningful?"*
+  3. Commit the changelog before or alongside the tag.
+  4. Write a **verbose GitHub release body** that includes every `Added` / `Fixed` / `Changed` / `Removed` item from that version's changelog section — never just a one-liner.
 
 ## Project
 

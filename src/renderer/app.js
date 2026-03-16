@@ -1291,22 +1291,42 @@ window.addEventListener("DOMContentLoaded", async () => {
     loadLibrary();
   }
 
+  // ── Config warnings (extensible) ────────────────────────────
+  // Add a key to this Set to mark a warning as active; remove it when
+  // resolved. Any active warning shows an amber dot on the Settings nav
+  // item so the user is guided there to fix it.
+  const configWarnings = new Set();
+
+  function setConfigWarning(key, active) {
+    if (active) configWarnings.add(key);
+    else configWarnings.delete(key);
+    document
+      .getElementById("nav-settings")
+      .classList.toggle("has-warnings", configWarnings.size > 0);
+  }
+
   // ── Calibre presence banner ─────────────────────────────────
   // The main process probes for ebook-convert at startup and fires
   // calibre-status once the renderer is ready. We also re-check on demand
   // when the user navigates to Settings (covers the "just installed" case).
-  function setCalibreBanner(found) {
+  function setCalibreBanner(found, downloadUrl) {
     document
       .getElementById("calibre-banner")
       .classList.toggle("hidden", found);
+    setConfigWarning("calibre", !found);
+    if (downloadUrl) {
+      document.getElementById("calibre-banner-link").href = downloadUrl;
+    }
   }
 
-  window.api.onCalibreStatus(({ found }) => setCalibreBanner(found));
+  window.api.onCalibreStatus(({ found, downloadUrl }) =>
+    setCalibreBanner(found, downloadUrl)
+  );
 
   // Re-check every time the user opens Settings so a freshly installed
   // Calibre is reflected without needing a full app restart.
   document.getElementById("nav-settings").addEventListener("click", async () => {
-    const { found } = await window.api.checkCalibre();
-    setCalibreBanner(found);
+    const { found, downloadUrl } = await window.api.checkCalibre();
+    setCalibreBanner(found, downloadUrl);
   }, { capture: true });
 });

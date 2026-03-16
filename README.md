@@ -113,8 +113,8 @@ Progress for each step is shown in the UI next to the book.
 **Books transferred by other apps don't show covers or match library entries**
 ABS2Kindle identifies books on your Kindle by matching the ASIN embedded in the AZW3 file against your ABS library metadata. Books added via other means (Calibre, Send-to-Kindle email, direct copy, etc.) may not have an ASIN at all, or may carry a different ASIN than the one stored in ABS. These books will still appear in the Kindle view but without a cover or a matched library entry — they show only the raw filename. This is expected behaviour and does not affect books sent through this app.
 
-**Calibre not found (Windows)**
-The transfer panel will show a "Calibre not found" message with a download link. Install Calibre from [calibre-ebook.com](https://calibre-ebook.com/download) and restart the app.
+**Calibre not found**
+The Settings nav item will turn amber with a warning icon as soon as the app starts. Open Settings to see a banner with a direct download link for your platform. The transfer panel will also show a "Calibre not found" message if you attempt a transfer before installing. Install Calibre and restart the app — the warning clears automatically.
 
 **Kindle not detected (Windows)**
 - Make sure the Kindle is unlocked and showing "Connected" on its screen

@@ -7,6 +7,17 @@ Versions correspond to git tags.
 
 ---
 
+## [v0.2.3] — 2026-03-16
+
+### Added
+- Settings sidebar item now glows amber with a warning icon when Calibre isn't installed — you'll know to fix it before attempting a transfer, without having to discover it mid-send
+- The "Download Calibre" link in Settings now takes you straight to the right download page for your OS (Windows, macOS, or Linux) instead of a generic landing page
+
+### Fixed
+- Minor layout glitch in the Calibre warning banner where part of the description text was appearing on its own line
+
+---
+
 ## [v0.2.2] — 2026-03-14
 
 ### Added
@@ -81,6 +92,7 @@ Versions correspond to git tags.
 
 ---
 
+[v0.2.3]: https://github.com/TheSingularis/ABS2Kindle/releases/tag/v0.2.3
 [v0.2.2]: https://github.com/TheSingularis/ABS2Kindle/releases/tag/v0.2.2
 [v0.2.1]: https://github.com/TheSingularis/ABS2Kindle/releases/tag/v0.2.1
 [v0.1.1]: https://github.com/TheSingularis/ABS2Kindle/releases/tag/v0.1.1

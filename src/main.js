@@ -51,11 +51,17 @@ const {
 // ── Calibre detection ─────────────────────────────────────────
 /**
  * Probes for ebook-convert (Calibre) on the system.
- * Returns { found: bool, path: string|null }.
+ * Returns { found: bool, path: string|null, downloadUrl: string }.
  * Never throws.
  */
 function detectCalibre() {
   const { execFileSync } = require("child_process");
+  const downloadUrl =
+    process.platform === "win32"
+      ? "https://calibre-ebook.com/download_windows"
+      : process.platform === "darwin"
+        ? "https://calibre-ebook.com/download_osx"
+        : "https://calibre-ebook.com/download_linux";
 
   if (process.platform === "win32") {
     const candidates = [
@@ -76,9 +82,9 @@ function detectCalibre() {
       ),
     ];
     for (const c of candidates) {
-      if (fs.existsSync(c)) return { found: true, path: c };
+      if (fs.existsSync(c)) return { found: true, path: c, downloadUrl };
     }
-    return { found: false, path: null };
+    return { found: false, path: null, downloadUrl };
   }
 
   // Linux/macOS: try `which ebook-convert`
@@ -88,9 +94,9 @@ function detectCalibre() {
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    return { found: !!p, path: p || null };
+    return { found: !!p, path: p || null, downloadUrl };
   } catch {
-    return { found: false, path: null };
+    return { found: false, path: null, downloadUrl };
   }
 }
 

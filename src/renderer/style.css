@@ -179,6 +179,29 @@ body {
     color: var(--text);
 }
 
+/* Warning icon — hidden by default, shown via .has-warnings */
+.nav-warn-icon {
+    display: none;
+    margin-left: auto;
+    color: var(--accent);
+    flex-shrink: 0;
+}
+
+/* Amber banner-style highlight — shown when ≥1 config warning is active */
+.sidebar-item.has-warnings {
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--text);
+}
+
+.sidebar-item.has-warnings .nav-warn-icon {
+    display: block;
+}
+
+.sidebar-item.has-warnings:hover {
+    background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+
 .no-device {
     color: var(--text3);
     font-size: 12px;
