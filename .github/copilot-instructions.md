@@ -5,7 +5,7 @@
 - **Always update `README.md`** after any major changes (new features, changed behaviour, updated setup steps, new dependencies, etc.).
 - **On every release / version tag**, always:
   1. Update `CHANGELOG.md` — add a new `## [vX.Y.Z] — YYYY-MM-DD` block at the top with all changes grouped under `Added`, `Fixed`, `Changed`, `Removed`; add a reference link at the bottom.
-  2. **Write changelog entries for end users, not developers.** Describe what the user sees or experiences — never mention internal implementation details (class names, function names, architectural patterns, CSS properties, etc.). Ask: *"would a non-technical user find this meaningful?"*
+  2. **Write changelog entries for end users, not developers.** Describe what the user sees or experiences — never mention internal implementation details (class names, function names, architectural patterns, CSS properties, etc.). Ask: _"would a non-technical user find this meaningful?"_
   3. Commit the changelog before or alongside the tag.
   4. Write a **verbose GitHub release body** that includes every `Added` / `Fixed` / `Changed` / `Removed` item from that version's changelog section — never just a one-liner.
 
@@ -78,23 +78,23 @@ onKindleAsinResolved(callback); // registers listener for "kindle-asin-resolved"
 
 ## IPC Handlers (main.js)
 
-| Channel              | Type         | Notes                                                                                                                                                       |
-| -------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ping`               | handle       | returns `"pong"`                                                                                                                                            |
-| `get-settings`       | handle       | returns in-memory `settingsStore`                                                                                                                           |
-| `save-settings`      | handle       | merges + writes `settings.json`                                                                                                                             |
-| `test-connection`    | handle       | GET `/api/libraries` with Bearer token                                                                                                                      |
-| `get-libraries`      | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                                                                                                          |
-| `get-books`          | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                                                                                                    |
-| `detect-kindles`     | handle       | Windows: Shell.Application COM; Linux: GVFS → kmtpd → jmtpfs                                                                                             |
-| `list-kindle-books`  | handle       | Lists books on connected Kindle; Windows MTP returns cached ASINs and kicks off background resolution |
-| `delete-kindle-book` | handle       | Deletes a book from Kindle by filename; evicts ASIN cache on Windows MTP                                                                                   |
-| `send-to-kindle`     | handle       | downloads EPUB to tmp, converts, copies to Kindle; up to 3 books processed concurrently (steps 1–4), copy step serialised; emits `transfer-progress` events |
-| `transfer-progress`  | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                                                                                                |
-| `kindle-asin-resolved` | send (event) | main → renderer (Windows MTP only); payload `{ filename, asin }` as background resolution completes                                                      |
-| `window-minimize`    | on           | minimize focused window                                                                                                                                     |
-| `window-maximize`    | on           | toggle maximize on focused window                                                                                                                           |
-| `window-close`       | on           | close focused window                                                                                                                                        |
+| Channel                | Type         | Notes                                                                                                                                                       |
+| ---------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ping`                 | handle       | returns `"pong"`                                                                                                                                            |
+| `get-settings`         | handle       | returns in-memory `settingsStore`                                                                                                                           |
+| `save-settings`        | handle       | merges + writes `settings.json`                                                                                                                             |
+| `test-connection`      | handle       | GET `/api/libraries` with Bearer token                                                                                                                      |
+| `get-libraries`        | handle       | GET `/api/libraries` — returns `{ ok, libraries }`                                                                                                          |
+| `get-books`            | handle       | GET `/api/libraries/:id/items` — returns `{ ok, books }`                                                                                                    |
+| `detect-kindles`       | handle       | Windows: Shell.Application COM; Linux: GVFS → kmtpd → jmtpfs                                                                                                |
+| `list-kindle-books`    | handle       | Lists books on connected Kindle; Windows MTP returns cached ASINs and kicks off background resolution                                                       |
+| `delete-kindle-book`   | handle       | Deletes a book from Kindle by filename; evicts ASIN cache on Windows MTP                                                                                    |
+| `send-to-kindle`       | handle       | downloads EPUB to tmp, converts, copies to Kindle; up to 3 books processed concurrently (steps 1–4), copy step serialised; emits `transfer-progress` events |
+| `transfer-progress`    | send (event) | main → renderer; payload `{ itemId, status, name?, error? }`                                                                                                |
+| `kindle-asin-resolved` | send (event) | main → renderer (Windows MTP only); payload `{ filename, asin }` as background resolution completes                                                         |
+| `window-minimize`      | on           | minimize focused window                                                                                                                                     |
+| `window-maximize`      | on           | toggle maximize on focused window                                                                                                                           |
+| `window-close`         | on           | close focused window                                                                                                                                        |
 
 ### Transfer progress `status` values
 
@@ -110,12 +110,12 @@ onKindleAsinResolved(callback); // registers listener for "kindle-asin-resolved"
 
 Detection is platform-aware. On Windows, Shell.Application COM is used. On Linux, the 3-tier chain runs in priority order; first non-empty result wins:
 
-| Tier | Platform | Function                  | Works On                                                                       |
-| ---- | -------- | ------------------------- | ------------------------------------------------------------------------------ |
-| —    | Windows  | `findKindleMountsWindows()` | Windows — Shell.Application enumerates MTP devices                           |
-| 1    | Linux    | `findKindleMounts()`      | GVFS FUSE (`/run/user/<uid>/gvfs/`) + USB mass storage                         |
-| 2    | Linux    | `findKmtpdDevices()`      | KDE — queries `org.kde.kiod6` D-Bus (kmtpd module)                             |
-| 3    | Linux    | `findJmtpfsDevices()`     | Non-KDE Linux — mounts via `jmtpfs` FUSE                                       |
+| Tier | Platform | Function                    | Works On                                               |
+| ---- | -------- | --------------------------- | ------------------------------------------------------ |
+| —    | Windows  | `findKindleMountsWindows()` | Windows — Shell.Application enumerates MTP devices     |
+| 1    | Linux    | `findKindleMounts()`        | GVFS FUSE (`/run/user/<uid>/gvfs/`) + USB mass storage |
+| 2    | Linux    | `findKmtpdDevices()`        | KDE — queries `org.kde.kiod6` D-Bus (kmtpd module)     |
+| 3    | Linux    | `findJmtpfsDevices()`       | Non-KDE Linux — mounts via `jmtpfs` FUSE               |
 
 ### `findKmtpdDevices()` detail
 
