@@ -1290,4 +1290,23 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (settingsForRenderer.serverUrl && settingsForRenderer.apiKey) {
     loadLibrary();
   }
+
+  // ── Calibre presence banner ─────────────────────────────────
+  // The main process probes for ebook-convert at startup and fires
+  // calibre-status once the renderer is ready. We also re-check on demand
+  // when the user navigates to Settings (covers the "just installed" case).
+  function setCalibreBanner(found) {
+    document
+      .getElementById("calibre-banner")
+      .classList.toggle("hidden", found);
+  }
+
+  window.api.onCalibreStatus(({ found }) => setCalibreBanner(found));
+
+  // Re-check every time the user opens Settings so a freshly installed
+  // Calibre is reflected without needing a full app restart.
+  document.getElementById("nav-settings").addEventListener("click", async () => {
+    const { found } = await window.api.checkCalibre();
+    setCalibreBanner(found);
+  }, { capture: true });
 });

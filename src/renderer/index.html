@@ -93,6 +93,12 @@
                 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                 <circle cx="12" cy="7" r="4" />
             </symbol>
+            <!-- external-link -->
+            <symbol id="icon-external-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+            </symbol>
         </svg>
 
         <div id="app">
@@ -200,6 +206,21 @@
 
                     <!-- Settings view (hidden by default) -->
                     <div id="view-settings" class="hidden">
+
+                        <!-- Calibre missing banner — shown when ebook-convert is not found -->
+                        <div id="calibre-banner" class="calibre-banner hidden">
+                            <svg class="icon calibre-banner-icon"><use href="#icon-alert" /></svg>
+                            <div class="calibre-banner-body">
+                                <strong>Calibre is not installed.</strong>
+                                Calibre's <code>ebook-convert</code> tool is required to send books to your Kindle.
+                                <a id="calibre-banner-link" href="https://calibre-ebook.com/download" target="_blank">
+                                    Download Calibre
+                                    <svg class="icon" style="width:11px;height:11px;vertical-align:-1px"><use href="#icon-external-link" /></svg>
+                                </a>
+                                <span class="calibre-banner-hint">After installing, restart ABS2Kindle.</span>
+                            </div>
+                        </div>
+
                         <div id="settings-form">
                             <h2>Server Settings</h2>
 

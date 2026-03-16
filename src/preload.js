@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("api", {
   testConnection: (opts) => ipcRenderer.invoke("test-connection", opts),
   checkOidcAvailable: (opts) =>
     ipcRenderer.invoke("check-oidc-available", opts),
+  checkCalibre: () => ipcRenderer.invoke("check-calibre"),
+  onCalibreStatus: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("calibre-status", handler);
+    return () => ipcRenderer.removeListener("calibre-status", handler);
+  },
 
   // OIDC auth — opens a modal browser window with the ABS OIDC flow
   startOidcLogin: (opts) => ipcRenderer.invoke("start-oidc-login", opts),

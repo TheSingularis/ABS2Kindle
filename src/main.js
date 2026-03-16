@@ -48,6 +48,52 @@ const {
   copyToKindle,
 } = require("./lib/kindle-transfer");
 
+// ── Calibre detection ─────────────────────────────────────────
+/**
+ * Probes for ebook-convert (Calibre) on the system.
+ * Returns { found: bool, path: string|null }.
+ * Never throws.
+ */
+function detectCalibre() {
+  const { execFileSync } = require("child_process");
+
+  if (process.platform === "win32") {
+    const candidates = [
+      path.join(
+        process.env["ProgramFiles"] || "C:\\Program Files",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+      path.join(
+        process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+      path.join(
+        process.env["LOCALAPPDATA"] || "",
+        "Calibre2",
+        "ebook-convert.exe",
+      ),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return { found: true, path: c };
+    }
+    return { found: false, path: null };
+  }
+
+  // Linux/macOS: try `which ebook-convert`
+  try {
+    const p = execFileSync("which", ["ebook-convert"], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return { found: !!p, path: p || null };
+  } catch {
+    return { found: false, path: null };
+  }
+}
+
 // ── Window ────────────────────────────────────────────────────
 let mainWindow;
 
@@ -130,6 +176,8 @@ function registerLinuxProtocol() {
 
 // ── IPC: Settings ─────────────────────────────────────────────
 ipcMain.handle("ping", async () => "pong");
+
+ipcMain.handle("check-calibre", async () => detectCalibre());
 
 ipcMain.handle("get-settings", () => settingsStore);
 ipcMain.handle("save-settings", (_, data) => {
@@ -970,6 +1018,12 @@ if (!gotLock) {
     registerLinuxProtocol();
     loadSettings();
     createWindow();
+    // Probe for Calibre once the renderer is ready and push the result so
+    // it can show a banner immediately on startup without waiting for a transfer.
+    mainWindow.webContents.once("did-finish-load", () => {
+      const result = detectCalibre();
+      mainWindow.webContents.send("calibre-status", result);
+    });
   });
 
   app.on("window-all-closed", () => {
