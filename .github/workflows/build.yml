@@ -1,4 +1,4 @@
-name: Build AppImage (CI)
+name: Build (CI)
 
 on:
   push:
@@ -9,7 +9,19 @@ on:
 
 jobs:
     build:
-        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      args: --linux AppImage
+                      artifact: abs2kindle-appimage
+                      path: dist/*.AppImage
+                    - os: windows-latest
+                      args: --win
+                      artifact: abs2kindle-exe
+                      path: dist/*.exe
+
+        runs-on: ${{ matrix.os }}
 
         env:
             FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -26,18 +38,19 @@ jobs:
               with:
                   path: |
                       ~/.cache/electron
+                      ~/AppData/Local/electron/Cache
                   key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
             - name: Install dependencies
               run: npm ci
 
-            - name: Build AppImage
-              run: npx electron-builder --linux AppImage --publish never
+            - name: Build
+              run: npx electron-builder ${{ matrix.args }} --publish never
 
-            - name: Upload AppImage artifact
+            - name: Upload artifact
               uses: actions/upload-artifact@v4
               with:
-                  name: abs2kindle-appimage
-                  path: dist/*.AppImage
+                  name: ${{ matrix.artifact }}
+                  path: ${{ matrix.path }}
                   if-no-files-found: error
                   retention-days: 14
