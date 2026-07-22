@@ -74,24 +74,7 @@ jobs:
         permissions:
             contents: write
 
-        # Determine release type from tag shape
-        # v1.0   → major (make_latest=true,  prerelease=false)
-        # v1.0.1 → patch (make_latest=false, prerelease=true)
         steps:
-            - name: Determine release type
-              id: type
-              run: |
-                  TAG="${{ github.ref_name }}"
-                  if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                    echo "prerelease=true"  >> "$GITHUB_OUTPUT"
-                    echo "make_latest=false" >> "$GITHUB_OUTPUT"
-                    echo "label=Patch release" >> "$GITHUB_OUTPUT"
-                  else
-                    echo "prerelease=false" >> "$GITHUB_OUTPUT"
-                    echo "make_latest=true"  >> "$GITHUB_OUTPUT"
-                    echo "label=Major release" >> "$GITHUB_OUTPUT"
-                  fi
-
             - name: Download all artifacts
               uses: actions/download-artifact@v4
               with:
@@ -103,6 +86,6 @@ jobs:
               with:
                   files: dist/**
                   generate_release_notes: true
-                  prerelease: ${{ steps.type.outputs.prerelease }}
-                  make_latest: ${{ steps.type.outputs.make_latest }}
-                  name: "ABS2Kindle ${{ github.ref_name }} (${{ steps.type.outputs.label }})"
+                  prerelease: false
+                  make_latest: true
+                  name: "ABS2Kindle ${{ github.ref_name }}"
